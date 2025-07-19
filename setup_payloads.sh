@@ -507,3 +507,87 @@ chmod +x /opt/p4wnp1/hooks/oled_menu.py
 ########################################
 echo "[+] OLED joystick menu logic stub created."
 exit 0
+
+########################################
+# 18. .gitignore to exclude temp and generated files
+########################################
+cat << 'EOF' > /opt/p4wnp1/.gitignore
+__pycache__/
+*.pyc
+*.log
+*.swp
+*.img
+*.tmp
+*.bak
+*.pid
+*.state
+/data/
+/logs/
+/mnt/
+/tmp/
+EOF
+
+########################################
+# 19. README.md for GitHub repo
+########################################
+cat << 'EOF' > /opt/p4wnp1/README.md
+# P4wnP1-Zero2W
+
+A stealthy, modular payload launcher and HID network attack framework for Raspberry Pi Zero 2 W. Inspired by [P4wnP1 A.L.O.A.](https://github.com/RoganDawes/P4wnP1_aloa), reimagined for modern builds with joystick-based OLED UI and clean payload orchestration.
+
+## ✅ Features
+- Modular payloads (network, HID, covert shell, Wi-Fi)
+- OLED + joystick menu interface (WIP)
+- USB gadget emulation via config templates
+- GitHub auto-update support
+- Systemd integration for autostart
+- Clean directory structure and extensibility
+
+## 📦 Directory Structure
+```
+/opt/p4wnp1
+├── config/            # payload.json, active_payload, gadget configs
+├── payloads/          # attack payloads (network, listeners, windows, etc.)
+├── hooks/             # utilities: update, OLED menu, LED blinker, etc.
+├── run_payload.sh     # launcher script for selected payload
+├── .gitignore
+└── README.md
+```
+
+## 🚀 Setup
+```bash
+cd /opt/p4wnp1
+sudo ./setup_payloads.sh  # from initial script
+```
+
+## 📡 Payloads
+- `rogue_dhcp_dns` – Rogue DNS/DHCP server via dnsmasq
+- `wifi_ap` – Wi-Fi hotspot with hostapd
+- `lockpicker` – NetNTLM capture + unlock simulation
+- `responder` – LLMNR/NBNS spoofing (Responder)
+- `mass_storage` – USB file injection using `g_mass_storage`
+- `hid_backdoor` – HID raw covert shell channel
+
+## 🔄 GitHub Auto-Update
+Auto-pulls latest payloads on boot (via systemd):
+```bash
+/opt/p4wnp1/hooks/update_payloads.sh
+```
+
+## 🎛️ OLED Menu (WIP)
+Joystick-controlled menu to select payload interactively:
+```bash
+/opt/p4wnp1/hooks/oled_menu.py
+```
+
+## ✨ Credits
+- Based on P4wnP1 A.L.O.A. by Rogan Dawes
+- Raspberry Pi Foundation
+- Adafruit CircuitPython for OLED tools
+
+EOF
+
+########################################
+echo "[+] .gitignore and README.md added. Ready to commit."
+exit 0
+
