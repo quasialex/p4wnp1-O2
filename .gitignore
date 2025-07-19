@@ -4,7 +4,10 @@ __pycache__/
 *.swp
 *.img
 *.tmp
-/tmp/
-/var/
-/mnt/
+*.bak
+*.pid
+*.state
 /data/
+/logs/
+/mnt/
+/tmp/

@@ -3,6 +3,11 @@
 # It includes: DNSMasq rogue DHCP/DNS, a reverse shell listener, a stub OLED menu,
 # USB gadget templates (ECM, HID), and a reload mechanism
 
+if [ "$PWD" == "/opt/p4wnp1" ]; then
+  echo "[!] Warning: You are running this script from inside /opt/p4wnp1. "
+  echo "    This may cause README.md not to update correctly."
+fi
+
 mkdir -p /opt/p4wnp1/payloads/network
 mkdir -p /opt/p4wnp1/payloads/listeners
 mkdir -p /opt/p4wnp1/hooks
@@ -163,8 +168,6 @@ chmod +x /opt/p4wnp1/config/reload_gadget.sh
 
 ########################################
 echo "[+] Payloads, hooks, USB gadget templates, and reload script scaffolded successfully."
-exit 0
-
 ########################################
 # 6. Wi-Fi Access Point Payload
 ########################################
@@ -210,6 +213,8 @@ chmod +x /opt/p4wnp1/payloads/network/wifi_ap.sh
 ########################################
 # 7. Windows LockPicker Payload Stub
 ########################################
+mkdir -p /opt/p4wnp1/payloads/windows
+touch /opt/p4wnp1/payloads/windows/lockpicker.sh
 cat << 'EOF' > /opt/p4wnp1/payloads/windows/lockpicker.sh
 #!/bin/bash
 # Simulates a NetNTLM hash capture and brute-force unlock with known creds
@@ -227,9 +232,6 @@ chmod +x /opt/p4wnp1/payloads/windows/lockpicker.sh
 
 ########################################
 echo "[+] Added Wi-Fi AP and LockPicker payloads."
-exit 0
-[...existing script above...]
-
 ########################################
 # 8. USB Mass Storage Emulation Payload
 ########################################
@@ -310,10 +312,6 @@ chmod +x /opt/p4wnp1/hooks/led_feedback.sh
 
 ########################################
 echo "[+] Mass Storage, Responder, HID shell, and LED blink utility scaffolded."
-exit 0
-
-[...existing script above...]
-
 ########################################
 # 12. payload.json (Payload Registry)
 ########################################
@@ -382,8 +380,6 @@ systemctl enable p4wnp1.service
 
 ########################################
 echo "[+] payload.json, payload runner, and systemd service setup complete."
-exit 0
-
 ########################################
 # 15. GitHub Payload Auto-Update Script
 ########################################
@@ -421,8 +417,6 @@ chmod +x /opt/p4wnp1/hooks/update_payloads.sh
 
 ########################################
 echo "[+] GitHub auto-update script added."
-exit 0
-
 ########################################
 # 16. systemd Service for Git Auto-Update
 ########################################
@@ -446,8 +440,6 @@ systemctl enable p4wnp1-update.service
 
 ########################################
 echo "[+] Git auto-update systemd service installed."
-exit 0
-
 ########################################
 # 17. OLED Menu Joystick Payload Selector (stub)
 ########################################
@@ -506,8 +498,6 @@ chmod +x /opt/p4wnp1/hooks/oled_menu.py
 
 ########################################
 echo "[+] OLED joystick menu logic stub created."
-exit 0
-
 ########################################
 # 18. .gitignore to exclude temp and generated files
 ########################################
@@ -530,67 +520,56 @@ EOF
 ########################################
 # 19. README.md for GitHub repo
 ########################################
-cat << 'EOF' > /opt/p4wnp1/README.md
+cat > /opt/p4wnp1/README.md > /dev/null << EOF
 # P4wnP1-Zero2W
 
-A stealthy, modular payload launcher and HID network attack framework for Raspberry Pi Zero 2 W. Inspired by [P4wnP1 A.L.O.A.](https://github.com/RoganDawes/P4wnP1_aloa), reimagined for modern builds with joystick-based OLED UI and clean payload orchestration.
+A stealthy, modular payload launcher and HID network attack framework for Raspberry Pi Zero 2 W.
+Inspired by P4wnP1 A.L.O.A., rebuilt for modern builds with joystick OLED UI and clean payloads.
 
 ## ✅ Features
 - Modular payloads (network, HID, covert shell, Wi-Fi)
 - OLED + joystick menu interface (WIP)
 - USB gadget emulation via config templates
 - GitHub auto-update support
-- Systemd integration for autostart
-- Clean directory structure and extensibility
+- Systemd integration
 
-## 📦 Directory Structure
-```
-/opt/p4wnp1
-├── config/            # payload.json, active_payload, gadget configs
-├── payloads/          # attack payloads (network, listeners, windows, etc.)
-├── hooks/             # utilities: update, OLED menu, LED blinker, etc.
-├── run_payload.sh     # launcher script for selected payload
-├── .gitignore
-└── README.md
-```
+## 📂 Structure
+- /payloads/ — modular attack scripts
+- /hooks/ — OLED/menu logic, startup scripts
+- /tools/ — injectors, Responder/DNS/etc
+- /config/ — USB gadget templates
+- /logs/ — runtime logs (e.g., Responder)
 
-## 🚀 Setup
-```bash
-cd /opt/p4wnp1
-sudo ./setup_payloads.sh  # from initial script
-```
+## 🚀 Usage
+Clone the repo:
+~~bash
+git clone https://github.com/quasialex/p4wnp1-zero2w.git /opt/p4wnp1
+~~
 
-## 📡 Payloads
-- `rogue_dhcp_dns` – Rogue DNS/DHCP server via dnsmasq
-- `wifi_ap` – Wi-Fi hotspot with hostapd
-- `lockpicker` – NetNTLM capture + unlock simulation
-- `responder` – LLMNR/NBNS spoofing (Responder)
-- `mass_storage` – USB file injection using `g_mass_storage`
-- `hid_backdoor` – HID raw covert shell channel
+Run setup:
+~~bash
+sudo bash /opt/p4wnp1/setup_payloads.sh
+~~
 
-## 🔄 GitHub Auto-Update
-Auto-pulls latest payloads on boot (via systemd):
-```bash
-/opt/p4wnp1/hooks/update_payloads.sh
-```
+Run a payload manually:
+~~bash
+sudo bash /opt/p4wnp1/payloads/network/rogue_dhcp_dns.sh
+~~
 
-## 🎛️ OLED Menu (WIP)
+## 📡 OLED Menu (WIP)
 Joystick-controlled menu to select payload interactively:
-```bash
+~~bash
 /opt/p4wnp1/hooks/oled_menu.py
-```
+~~
 
 ## ✨ Credits
 - Based on P4wnP1 A.L.O.A. by Rogan Dawes
 - Raspberry Pi Foundation
 - Adafruit CircuitPython for OLED tools
-
 EOF
 
 ########################################
 echo "[+] .gitignore and README.md added. Ready to commit."
-exit 0
-
 ########################################
 # 20. HID Keystroke Injector Script
 ########################################
