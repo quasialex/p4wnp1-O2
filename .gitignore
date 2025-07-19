@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.log
+*.swp
+*.img
+*.tmp
+/tmp/
+/var/
+/mnt/
+/data/
