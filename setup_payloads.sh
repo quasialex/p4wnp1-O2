@@ -591,3 +591,86 @@ EOF
 echo "[+] .gitignore and README.md added. Ready to commit."
 exit 0
 
+########################################
+# 20. HID Keystroke Injector Script
+########################################
+mkdir -p /opt/p4wnp1/tools /opt/p4wnp1/payloads/hid
+
+cat << 'EOF' > /opt/p4wnp1/tools/inject_hid.sh
+#!/bin/bash
+# Send keystrokes over USB HID using /dev/hidg0
+
+HID_DEVICE="/dev/hidg0"
+SCRIPT="$1"
+DELAY=0.1
+
+if [[ -z "$SCRIPT" || ! -f "$SCRIPT" ]]; then
+  echo "Usage: $0 path/to/hid_script.txt"
+  exit 1
+fi
+
+if [[ ! -e "$HID_DEVICE" ]]; then
+  echo "[!] HID device $HID_DEVICE not found"
+  exit 1
+fi
+
+while read -r line; do
+  [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+  echo "[>] $line"
+  python3 /opt/p4wnp1/tools/hid_type.py "$line" > "$HID_DEVICE"
+  sleep $DELAY
+done < "$SCRIPT"
+EOF
+chmod +x /opt/p4wnp1/tools/inject_hid.sh
+
+########################################
+# 21. HID Typing Helper in Python
+########################################
+cat << 'EOF' > /opt/p4wnp1/tools/hid_type.py
+#!/usr/bin/env python3
+import sys
+import time
+
+def char_to_hid(c):
+    layout = {
+        'a': b'\x00\x00\x04\x00\x00\x00\x00\x00',
+        'b': b'\x00\x00\x05\x00\x00\x00\x00\x00',
+        'c': b'\x00\x00\x06\x00\x00\x00\x00\x00',
+        # add more as needed
+        'A': b'\x02\x00\x04\x00\x00\x00\x00\x00',
+        ' ': b'\x00\x00\x2c\x00\x00\x00\x00\x00',
+        '\n': b'\x00\x00\x28\x00\x00\x00\x00\x00'
+    }
+    return layout.get(c, b'\x00\x00\x2c\x00\x00\x00\x00\x00')
+
+if len(sys.argv) < 2:
+    print("Usage: hid_type.py <string>")
+    sys.exit(1)
+
+for ch in sys.argv[1]:
+    sys.stdout.buffer.write(char_to_hid(ch))
+    sys.stdout.buffer.flush()
+    time.sleep(0.01)
+    sys.stdout.buffer.write(b'\x00\x00\x00\x00\x00\x00\x00\x00')
+    sys.stdout.buffer.flush()
+    time.sleep(0.01)
+EOF
+chmod +x /opt/p4wnp1/tools/hid_type.py
+
+########################################
+# 22. Sample HID Payload Script
+########################################
+cat << 'EOF' > /opt/p4wnp1/payloads/hid/windows_creds.txt
+# Simulate Win+R, then type 'cmd'
+<GUI> r
+sleep 0.5
+cmd
+<ENTER>
+sleep 0.5
+echo off
+whoami
+EOF
+
+########################################
+echo "[+] HID injector, helper script, and sample payload added."
+exit 0
