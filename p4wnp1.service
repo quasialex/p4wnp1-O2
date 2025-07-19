@@ -1,0 +1,10 @@
+[Unit]
+Description=Custom P4wnP1 Framework
+After=multi-user.target
+
+[Service]
+ExecStart=/opt/p4wnp1/run.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
