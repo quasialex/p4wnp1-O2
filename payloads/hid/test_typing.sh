@@ -1,4 +1,4 @@
 #!/bin/bash
-# Injects simple keystrokes via HID
-echo -ne '\0\0\x04\0\0\0\0\0' > /dev/hidg0  # Types 'a'
-sleep 0.2
+# Types "a" via HID (keycode 0x04)
+/bin/echo -ne '\0\0\x04\0\0\0\0\0' > /dev/hidg0
+sleep 0.1
