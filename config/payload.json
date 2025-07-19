@@ -1,0 +1,22 @@
+{
+  "hid/test_typing.sh": {
+    "name": "Test Keystroke",
+    "description": "Types 'a' using HID gadget",
+    "enabled": true
+  },
+  "network/run_responder.sh": {
+    "name": "Responder (usb0)",
+    "description": "Launches Responder on the USB Ethernet interface",
+    "enabled": true
+  },
+  "network/rogue_dhcp_dns.sh": {
+  "name": "Rogue DHCP & DNS",
+  "description": "Spoofs DNS to 10.0.0.1 via usb0 using dnsmasq",
+  "enabled": true
+},
+"listeners/reverse_shell_listener.sh": {
+  "name": "Reverse Shell Listener",
+  "description": "Waits for reverse TCP shell on port 4444",
+  "enabled": true
+}
+}
