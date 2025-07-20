@@ -42,8 +42,25 @@ def run_command(cmd, label="output"):
         return f"✗ Error\n{str(e)}"
 
 def read_menu():
+    def validate_items(items):
+        valid = []
+        for item in items:
+            if "submenu" in item:
+                sub = validate_items(item["submenu"])
+                if sub:
+                    item["submenu"] = sub
+                    valid.append(item)
+            elif "script" in item and os.path.exists(item["script"]):
+                valid.append(item)
+            elif "action" in item and (
+                item["action"].startswith("sudo") or os.path.exists(item["action"])
+            ):
+                valid.append(item)
+        return valid
+
     with open(MENU_CONFIG, 'r') as f:
-        return json.load(f)
+        raw_menu = json.load(f)
+    return validate_items(raw_menu)
 
 def menu_loop(menu_stack):
     index = 0
