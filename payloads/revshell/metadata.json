@@ -1,0 +1,6 @@
+{
+  "name": "PowerShell Reverse Shell",
+  "description": "Starts a PowerShell TCP reverse shell on 10.13.37.1:4444",
+  "type": "network",
+  "script": "/home/pi/payloads/revshell/run.sh"
+}

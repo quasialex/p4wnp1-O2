@@ -1,0 +1,14 @@
+[
+  {
+    "name": "PowerShell Reverse Shell",
+    "script": "/home/pi/payloads/revshell.ps1"
+  },
+  {
+    "name": "USB HID Dropper",
+    "script": "/home/pi/payloads/hid_payload.sh"
+  },
+  {
+    "name": "Mass Storage Injector",
+    "script": "/home/pi/payloads/mass_storage.sh"
+  }
+]

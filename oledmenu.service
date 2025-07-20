@@ -1,0 +1,16 @@
+[Unit]
+Description=OLED Menu Launcher
+After=multi-user.target
+ConditionPathExists=/home/pi/oled/run_oled_menu.sh
+
+[Service]
+Type=simple
+ExecStart=/home/pi/oled/run_oled_menu.sh
+WorkingDirectory=/home/pi/oled
+StandardOutput=journal
+StandardError=journal
+Restart=always
+User=pi
+
+[Install]
+WantedBy=multi-user.target
