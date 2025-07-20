@@ -22,8 +22,14 @@ sudo apt update && sudo apt install -y \
 echo "=== [ Step 5: Ensuring pipx path ] ==="
 pipx ensurepath
 
-echo "=== [ Step 6: Installing impacket via pipx ] ==="
-pip3 install impacket --break-system-packages
+echo "=== [ Step 6: Installing impacket from Kali repo ] ==="
+sudo apt install -y python3-impacket
+
+# Symlink all Impacket CLI tools to /usr/local/bin
+sudo find /usr/share/doc/python3-impacket/examples/ -type f -name "*.py" | while read file; do
+  binname=$(basename "$file")
+  sudo ln -sf "$file" "/usr/local/bin/$binname"
+done
 
 echo "=== [ Step 7: Installing OLED library via pip ] ==="
 pip3 install luma.oled --break-system-packages
