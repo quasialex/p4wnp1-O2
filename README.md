@@ -1,4 +1,4 @@
-# P4wnP1-Zero2W
+# P4wnP1-O2
 
 A stealthy, modular payload launcher and HID/network attack framework for Raspberry Pi Zero 2 W.  
 Inspired by P4wnP1 A.L.O.A., rebuilt for modern builds with joystick OLED UI, USB gadget scripts, and clean payloads.
