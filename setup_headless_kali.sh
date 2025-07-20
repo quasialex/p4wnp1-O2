@@ -23,7 +23,7 @@ echo "=== [ Step 5: Ensuring pipx path ] ==="
 pipx ensurepath
 
 echo "=== [ Step 6: Installing impacket via pipx ] ==="
-pipx install impacket
+pip3 install impacket --break-system-packages
 
 echo "=== [ Step 7: Installing OLED library via pip ] ==="
 pip3 install luma.oled --break-system-packages
