@@ -17,15 +17,15 @@ echo "=== [ Step 4: Installing terminal essentials ] ==="
 sudo apt update && sudo apt install -y \
   git python3-pip screen tmux build-essential \
   libfreetype-dev libjpeg-dev python3-smbus \
-  bettercap mitmproxy responder pipx
+  bettercap mitmproxy responder pipx rustc cargo
 
 echo "=== [ Step 5: Ensuring pipx path ] ==="
 pipx ensurepath
 
-echo "=== [ Step 6: Installing Python CLI tools via pipx ] ==="
+echo "=== [ Step 6: Installing impacket via pipx ] ==="
 pipx install impacket
 
-echo "=== [ Step 7: Installing OLED Python library via pip ] ==="
+echo "=== [ Step 7: Installing OLED library via pip ] ==="
 pip3 install luma.oled --break-system-packages
 
 echo "=== [ Step 8: Set to CLI-only boot ] ==="
