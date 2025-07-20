@@ -1,49 +1,50 @@
 #!/usr/bin/env python3
-import json
+"""
+OLED Menu UI (stub): Navigate payloads using joystick
+- Up/Down = scroll
+- Press = run payload
+"""
+
 import os
 import time
 
-CONFIG = "/opt/p4wnp1/config/payload.json"
-ACTIVE = "/opt/p4wnp1/config/active_payload"
+# Placeholder for OLED and joystick logic (to be added when hardware arrives)
+PAYLOADS = [
+    ("Rogue DHCP + DNS", "/opt/p4wnp1/payloads/network/rogue_dhcp_dns.sh"),
+    ("Evil AP Stealer", "/opt/p4wnp1/payloads/network/wifi_ap_stealer.sh"),
+    ("Responder Attack", "/opt/p4wnp1/payloads/network/responder_attack.sh"),
+    ("Reverse Shell", "/opt/p4wnp1/payloads/network/reverse_shell_tunnel.sh"),
+    ("LockPicker (HID)", "/opt/p4wnp1/payloads/windows/lockpicker.sh"),
+    ("SSLStrip Phishing", "/opt/p4wnp1/payloads/network/sslstrip_phishing.sh"),
+]
 
-# Placeholder joystick interface
-class Joystick:
-    def __init__(self):
-        self.index = 0
-    def read_input(self):
-        # Stub: Replace with actual GPIO input
-        key = input("[W/S] Up/Down | [Enter] Select > ").lower()
-        return key
+cursor = 0
 
-def load_payloads():
-    with open(CONFIG, 'r') as f:
-        data = json.load(f)
-        return [key for key in data if data[key].get("enabled")]
+def display_menu():
+    os.system("clear")
+    print("=== P4wnP1 Payload Menu ===\n")
+    for i, (name, _) in enumerate(PAYLOADS):
+        if i == cursor:
+            print(f"> {name}")
+        else:
+            print(f"  {name}")
+    print("\n[UP/DOWN = Navigate | ENTER = Run | Q = Quit]")
 
-def select_payload(payloads):
-    js = Joystick()
-    while True:
-        os.system('clear')
-        print("=== P4wnP1 Payload Menu ===")
-        for i, p in enumerate(payloads):
-            print(f"{'→' if i == js.index else ' '} {p}")
-        key = js.read_input()
-        if key == 'w':
-            js.index = (js.index - 1) % len(payloads)
-        elif key == 's':
-            js.index = (js.index + 1) % len(payloads)
-        elif key == '':  # Enter key
-            return payloads[js.index]
+def run_payload(index):
+    name, path = PAYLOADS[index]
+    print(f"\n[*] Running: {name}")
+    os.system(f"bash {path}")
+    input("\n[✓] Press Enter to return to menu...")
 
-def main():
-    payloads = load_payloads()
-    if not payloads:
-        print("[!] No enabled payloads in config.")
-        return
-    chosen = select_payload(payloads)
-    with open(ACTIVE, 'w') as f:
-        f.write(chosen)
-    print(f"[+] Selected payload: {chosen}")
-
-if __name__ == '__main__':
-    main()
+# TEMP: keyboard interface while OLED+joystick is not wired
+while True:
+    display_menu()
+    key = input().lower()
+    if key == "q":
+        break
+    elif key == "":
+        run_payload(cursor)
+    elif key == "w":
+        cursor = (cursor - 1) % len(PAYLOADS)
+    elif key == "s":
+        cursor = (cursor + 1) % len(PAYLOADS)
