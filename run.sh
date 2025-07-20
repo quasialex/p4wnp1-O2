@@ -1,18 +1,42 @@
 #!/bin/bash
+set -euo pipefail
 
-# Set up USB gadgets and networking
-/opt/p4wnp1/config/usb_gadget.sh
-sleep 2
-/opt/p4wnp1/config/setup_net.sh
-sleep 2
+# === Config ===
+P4WN_HOME="/opt/p4wnp1"
+ACTIVE_PAYLOAD="$P4WN_HOME/config/active_payload"
+PAYLOADS_DIR="$P4WN_HOME/payloads"
+LOG="$P4WN_HOME/logs/runner.log"
 
-# Load active payload path
-PAYLOAD_PATH=$(cat /opt/p4wnp1/config/active_payload)
+mkdir -p "$(dirname "$LOG")"
 
-# Execute if it exists
-if [[ -x /opt/p4wnp1/payloads/$PAYLOAD_PATH ]]; then
-    echo "Executing: $PAYLOAD_PATH"
-    /opt/p4wnp1/payloads/$PAYLOAD_PATH
+# === Logging ===
+exec > >(tee -a "$LOG") 2>&1
+
+echo "[*] Starting run.sh at $(date)"
+
+# === Setup USB gadget and networking ===
+echo "[*] Setting up USB gadget..."
+bash "$P4WN_HOME/config/usb_gadget.sh"
+sleep 1
+
+echo "[*] Setting up networking..."
+bash "$P4WN_HOME/config/setup_net.sh"
+sleep 1
+
+# === Read active payload ===
+if [[ ! -f "$ACTIVE_PAYLOAD" ]]; then
+  echo "[!] No active payload file found at $ACTIVE_PAYLOAD"
+  exit 1
+fi
+
+PAYLOAD_ID=$(cat "$ACTIVE_PAYLOAD")
+PAYLOAD_PATH="$PAYLOADS_DIR/$PAYLOAD_ID"
+
+# === Run payload ===
+if [[ -x "$PAYLOAD_PATH" ]]; then
+  echo "[+] Executing payload: $PAYLOAD_ID"
+  "$PAYLOAD_PATH"
 else
-    echo "No valid payload: $PAYLOAD_PATH"
+  echo "[!] Payload not found or not executable: $PAYLOAD_PATH"
+  exit 1
 fi
