@@ -1,54 +1,96 @@
+(
 [
   {
-    "name": "PowerShell Reverse Shell",
-    "script": "/opt/p4wnp1-o2/payloads/revshell.ps1"
+    "name": "HID Attacks",
+    "submenu": [
+      {
+        "name": "PowerShell Reverse Shell",
+        "script": "/opt/p4wnp1-o2/payloads/hid/reverse_shell.ps1"
+      },
+      {
+        "name": "USB Stealer",
+        "script": "/opt/p4wnp1-o2/payloads/hid/usb_stealer.ps1"
+      },
+      {
+        "name": "Domain Enumerator",
+        "script": "/opt/p4wnp1-o2/payloads/hid/domain_enum.ps1"
+      },
+      {
+        "name": "Lockpicker",
+        "script": "/opt/p4wnp1-o2/payloads/hid/lockpicker.ps1"
+      },
+      {
+        "name": "Test Typing",
+        "script": "/opt/p4wnp1-o2/payloads/hid/test_typing.ps1"
+      }
+    ]
   },
   {
-    "name": "USB HID Dropper",
-    "script": "/opt/p4wnp1-o2/payloads/hid_payload.sh"
+    "name": "Network Attacks",
+    "submenu": [
+      {
+        "name": "Rogue DHCP + DNS",
+        "script": "/opt/p4wnp1-o2/payloads/network/rogue_dhcp_dns.sh"
+      },
+      {
+        "name": "DNS Spoof & Redirect",
+        "script": "/opt/p4wnp1-o2/payloads/network/dns_spoof_redirect.sh"
+      },
+      {
+        "name": "Responder Attack",
+        "script": "/opt/p4wnp1-o2/payloads/network/responder_attack.sh"
+      },
+      {
+        "name": "Credential Snarf + Spoof",
+        "script": "/opt/p4wnp1-o2/payloads/network/credsnarf_spoof.sh"
+      }
+    ]
+  },
+  {
+    "name": "Listeners",
+    "submenu": [
+      {
+        "name": "Reverse Shell Listener",
+        "script": "/opt/p4wnp1-o2/payloads/listeners/revshell_listener.sh"
+      },
+      {
+        "name": "HID Backdoor Listener",
+        "script": "/opt/p4wnp1-o2/payloads/listeners/hid_backdoor.sh"
+      }
+    ]
+  },
+  {
+    "name": "USB Gadgets",
+    "submenu": [
+      {
+        "name": "HID only",
+        "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh hid"
+      },
+      {
+        "name": "Ethernet only",
+        "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh eth"
+      },
+      {
+        "name": "HID + ETH + Storage",
+        "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh multi"
+      }
+    ]
   },
   {
     "name": "Mass Storage Injector",
     "script": "/opt/p4wnp1-o2/payloads/mass_storage.sh"
   },
   {
-    "name": "USB Mode: HID only",
-    "action": "/opt/p4wnp1-o2/select_usb_mode.sh hid"
-  },
-  {
-    "name": "USB Mode: Ethernet only",
-    "action": "/opt/p4wnp1-o2/select_usb_mode.sh eth"
-  },
-  {
-    "name": "USB Mode: HID + ETH + Storage",
-    "action": "/opt/p4wnp1-o2/select_usb_mode.sh multi"
-  },
-  {
-    "name": "HID: Domain Enumerator",
-    "script": "/opt/p4wnp1-o2/payloads/hid/domain_enum_hid.sh"
-  },
-  {
-    "name": "HID: Reverse Shell Inject",
-    "script": "/opt/p4wnp1-o2/payloads/hid/reverse_shell_inject.sh"
-  },
-  {
-    "name": "HID: Lockpicker",
-    "script": "/opt/p4wnp1-o2/payloads/hid/lockpicker.sh"
-  },
-  {
-    "name": "HID: USB Stealer",
-    "script": "/opt/p4wnp1-o2/payloads/hid/usb_stealer.sh"
-  },
-  {
-    "name": "Listener: HID Backdoor",
-    "script": "/opt/p4wnp1-o2/payloads/listeners/hid_backdoor.sh"
-  },
-  {
-    "name": "Listener: Reverse Shell",
-    "script": "/opt/p4wnp1-o2/payloads/listeners/reverse_shell_listener.sh"
-  },
-  {
-    "name": "Network: CredSnarf Spoof",
-    "script": "/opt/p4wnp1-o2/payloads/network/credsnarf_spoof.sh"
+    "name": "System",
+    "submenu": [
+      {
+        "name": "Reboot",
+        "action": "sudo reboot"
+      },
+      {
+        "name": "Shutdown",
+        "action": "sudo poweroff"
+      }
+    ]
   }
 ]
