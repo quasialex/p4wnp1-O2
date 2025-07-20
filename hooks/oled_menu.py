@@ -26,27 +26,9 @@ def show(text, duration=0):
     if duration > 0:
         time.sleep(duration)
 
-def read_menu():
-    with open(MENU_CONFIG, 'r') as f:
-        return json.load(f)
-
-def get_input(max_index):
-    import RPi.GPIO as GPIO
-    from gpiozero import Button
-
-    # Placeholder for actual joystick handling
-    # Replace this with proper GPIO-based navigation
-    try:
-        idx = 0
-        while True:
-            show(f"> {menu[idx]['name']}", 0.2)
-            time.sleep(0.2)
-            idx = (idx + 1) % max_index
-    except KeyboardInterrupt:
-        return idx
-
 def run_command(cmd, label="output"):
     try:
+        os.makedirs(LOG_DIR, exist_ok=True)
         log_file = os.path.join(LOG_DIR, f"{label}.log")
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         with open(log_file, 'w') as f:
@@ -59,34 +41,54 @@ def run_command(cmd, label="output"):
     except Exception as e:
         return f"✗ Error\n{str(e)}"
 
-# === Main Menu Loop ===
-menu = read_menu()
-current = 0
+def read_menu():
+    with open(MENU_CONFIG, 'r') as f:
+        return json.load(f)
 
-while True:
-    try:
-        item = menu[current]
+def menu_loop(menu_stack):
+    index = 0
+    while True:
+        menu = menu_stack[-1]
+        item = menu[index]
         name = item.get("name", "Unnamed")
+
         show(f"> {name}")
         time.sleep(1)
 
-        if "action" in item:
-            show("Running...\n" + name)
-            result = run_command(item["action"], label=name.replace(" ", "_"))
-            show(result, DELAY_AFTER_RUN)
-
-        elif "script" in item:
-            script_path = item["script"]
-            if not os.path.exists(script_path):
-                show(f"✗ Not found\n{script_path}", 2)
+        try:
+            if "submenu" in item:
+                submenu = item["submenu"] + [{"name": "← Back"}]
+                menu_stack.append(submenu)
+                index = 0
                 continue
 
-            show("Running...\n" + name)
-            result = run_command(f"bash {script_path}", label=name.replace(" ", "_"))
-            show(result, DELAY_AFTER_RUN)
+            if "action" in item:
+                show("Running...\n" + name)
+                result = run_command(item["action"], label=name.replace(" ", "_"))
+                show(result, DELAY_AFTER_RUN)
 
-        current = (current + 1) % len(menu)
+            elif "script" in item:
+                script_path = item["script"]
+                if not os.path.exists(script_path):
+                    show(f"✗ Not found\n{script_path}", 2)
+                    continue
+                show("Running...\n" + name)
+                result = run_command(f"bash {script_path}", label=name.replace(" ", "_"))
+                show(result, DELAY_AFTER_RUN)
 
-    except KeyboardInterrupt:
-        show("Exiting...")
-        break
+            index = (index + 1) % len(menu)
+
+        except KeyboardInterrupt:
+            if len(menu_stack) > 1 and index == len(menu) - 1:
+                menu_stack.pop()
+                index = 0
+                continue
+            show("Exiting...")
+            break
+
+# === Start
+try:
+    top_menu = read_menu()
+    menu_loop([top_menu])
+except Exception as e:
+    show(f"Fatal error:\n{str(e)}", 3)
