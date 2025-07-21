@@ -79,19 +79,49 @@
     "name": "Shell Access",
     "submenu": [
       {
-        "name": "Serial Shell (ttyGS0)",
-        "action": "sudo systemctl start serial-getty@ttyGS0.service"
+        "name": "Start Serial Shell",
+        "script": "/opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
       },
       {
-        "name": "Tmux Shell (USB-Ethernet)",
-        "action": "tmux new-session -d -s oledshell"
+        "name": "Stop Serial Shell",
+        "action": "sudo systemctl stop serial-getty@ttyGS0.service"
       },
       {
-        "name": "Reverse Shell to Host",
-        "action": "bash /opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
-      }
+        "name": "Start Tmux Shell (USB-Ethernet)",
+        "script": "/opt/p4wnp1-o2/payloads/shell/start_tmux_shell.sh"
+      },
+      {
+       "name": "Stop Tmux Shell",
+       "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"
+     }
+     {
+       "name": "Reverse Shell to Host",
+       "action": "bash /opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
+     }
     ]
   },
+  {
+  "name": "Shell",
+  "submenu": [
+    {
+      "name": "Start Serial Shell",
+      "script": "/opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
+    },
+    {
+      "name": "Stop Serial Shell",
+      "action": "sudo systemctl stop serial-getty@ttyGS0.service"
+    },
+    {
+      "name": "Start Tmux Shell (USB-Ethernet)",
+      "script": "/opt/p4wnp1-o2/payloads/shell/start_tmux_shell.sh"
+    },
+    {
+      "name": "Stop Tmux Shell",
+      "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"
+    }
+  ]
+}
+
   {
     "name": "Mass Storage Injector",
     "script": "/opt/p4wnp1-o2/payloads/mass_storage.sh"
