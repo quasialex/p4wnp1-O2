@@ -93,7 +93,7 @@ def harvest(
         g.converter.crack_auto = True
 
     async def _run():
-        async with g:
+        with g:
             await g.run(duration=duration, crack=g.converter.crack_auto)
 
     typer.echo("[bold cyan]Starting harvest…[/bold cyan]")
@@ -113,10 +113,10 @@ def live(
     g = Gotchi(cfg_path=config)
 
     async def _run_forever():
-        async with g:
+        with g:
             while True:
                 await asyncio.sleep(3600)
-
+                
     typer.echo("[bold cyan]Live mode – press Ctrl-C to stop.[/bold cyan]")
     try:
         _run_with_spinner(_run_forever)
