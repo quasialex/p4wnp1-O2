@@ -11,7 +11,7 @@ CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
 PAYLOAD_NAME="reverse_shell_tunnel"
 LOG_DIR="/opt/p4wnp1-o2/logs"
 LOG_FILE="$LOG_DIR/${PAYLOAD_NAME}.log"
-REMOTE_HOST="${RS_HOST:-10.13.37.1}"
+REMOTE_HOST="${RS_HOST:-192.168.7.1}"
 REMOTE_PORT="${RS_PORT:-443}"
 
 mkdir -p "$LOG_DIR"
