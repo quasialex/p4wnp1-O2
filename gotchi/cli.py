@@ -88,6 +88,9 @@ def harvest(
 
     # override cfg path & wordlist on-the-fly
     g = Gotchi(cfg_path=config)
+    # honour --iface flag
+    g.cfg.setdefault(\"hw\", {})[\"iface\"] = iface
+                     
     if wordlist:
         g.converter.wordlists = [str(wordlist.expanduser())]
         g.converter.crack_auto = True
@@ -111,6 +114,7 @@ def live(
 ):
     _setup_logging(quiet)
     g = Gotchi(cfg_path=config)
+    g.cfg.setdefault(\"hw\", {})[\"iface\"] = iface
 
     async def _run_forever():
         with g:
