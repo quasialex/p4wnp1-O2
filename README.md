@@ -75,6 +75,15 @@ To execute the currently selected payload (as defined in
 sudo /opt/p4wnp1/run.sh
 ```
 
+### 🔍 List available payloads
+
+Quickly view which payloads are available (and whether they are
+enabled) using the helper script:
+
+```bash
+python3 /opt/p4wnp1/tools/payload_manager.py list
+```
+
 ---
 
 ## 📡 OLED Menu (WIP)
