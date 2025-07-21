@@ -1,15 +1,19 @@
 #!/bin/bash
 
-# List enabled payloads from payload.json
-jq -r 'to_entries[] | select(.value.enabled == true) | "\(.key): \(.value.name)"' /opt/p4wnp1/config/payload.json
+P4WN_HOME="${P4WN_HOME:-/opt/p4wnp1}"
+CFG="$P4WN_HOME/config/payload.json"
 
-echo ""
-echo "Enter the payload path to activate (e.g., hid/test_typing.sh):"
-read NEW
+# List enabled payload IDs from payload.json
+PAYLOADS=$(jq -r 'keys[] as $k | select(.[$k].enabled == true) | $k' "$CFG")
 
-# Validate
-if [[ -x /opt/p4wnp1/payloads/$NEW ]]; then
-  echo "$NEW" > /opt/p4wnp1/config/active_payload
+echo "Available payloads:"
+printf '%s\n' "$PAYLOADS"
+echo
+read -p "Enter the payload ID to activate: " NEW
+
+# Validate that the ID exists
+if jq -e --arg id "$NEW" '.[$id]?' "$CFG" >/dev/null; then
+  echo "$NEW" > "$P4WN_HOME/config/active_payload"
   echo "Active payload updated to: $NEW"
 else
   echo "Invalid selection. No changes made."
