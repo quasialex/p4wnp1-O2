@@ -124,11 +124,36 @@ class Gotchi:
                  cfg_path: str | Path | None = None,
                  loop: Optional[asyncio.AbstractEventLoop] = None):
         self.cfg = _load_cfg(cfg_path)
+        # ------------------------------------------------------------------
+        # helper: dotted-path lookup with default
+        # ------------------------------------------------------------------
+        def _cfg(path: str, default=None):
+            cur = self.cfg
+            for part in path.split("."):
+                if not isinstance(cur, dict) or part not in cur:
+                    return default
+                cur = cur[part]
+            return cur
+
         self.loop = loop or asyncio.get_event_loop()
 
-        hw_cfg = self.cfg["hw"]
-        atk_cfg = self.cfg["attacks"]["deauth"]
-        cap_cfg = self.cfg["capture"]["rotate"]
+        # ------------------------------------------------------------------
+        # pull sections with fallback / defaults
+        # ------------------------------------------------------------------
+        hw_cfg   = _cfg("hw",           {})
+        hop_cfg  = _cfg("hw.hop",       {})
+        atk_cfg  = _cfg("attacks.deauth", {})
+        cap_cfg  = _cfg("capture.rotate", {})
+
+        # mandatory value: physical interface
+        iface = hw_cfg.get("iface")
+        if iface is None:
+            raise ValueError("config.toml is missing [hw] -> iface")
+
+        # defaults for optional values
+        channels   = hop_cfg.get("channels", [1, 6, 11])
+        intervalms = hop_cfg.get("interval_ms", 400)
+
 
         self.iface_mon = f'{hw_cfg["iface"]}mon'
 
