@@ -161,7 +161,7 @@ Many micro-USB cables are **charge-only** and do **not support data transfer**. 
 
 ## 🛠 Requirements
 
-* Raspberry Pi Zero or Zero 2 W
+* Raspberry Pi Zero 2 W
 * Kali Linux ARM image (Zero/Zero2W build)
 * USB OTG capability — use the **“USB” port**, not the “PWR” port (supports gadget mode)
 * Waveshare 1.3" 128x64 OLED HAT (SH1106, i2c)
