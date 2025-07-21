@@ -1,7 +1,9 @@
 new Vue({
     el: '#q-app',
     data: {
-        payloads: {}
+        payloads: {},
+        tab: 'payloads',
+        logText: ''
     },
     methods: {
         fetchPayloads() {
@@ -18,9 +20,19 @@ new Vue({
             fetch('/api/run/' + p, {method: 'POST'})
                 .then(r => r.text())
                 .then(t => this.$q.notify({message: t, timeout: 2000}));
+        },
+        fetchLog() {
+            fetch('/api/log').then(r => r.text()).then(t => { this.logText = t; });
         }
     },
     mounted() {
         this.fetchPayloads();
+    },
+    watch: {
+        tab(val) {
+            if (val === 'log') {
+                this.fetchLog();
+            }
+        }
     }
 });
