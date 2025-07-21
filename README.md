@@ -93,6 +93,7 @@ Joystick-controlled menu to select payload interactively:
 ```bash
 sudo python3 /opt/p4wnp1/hooks/oled_menu.py
 ```
+(set `P4WN_HOME` if installed elsewhere)
 
 > Requires: `luma.oled`, joystick/button GPIO mapping, and Waveshare 1.3" OLED setup.
 

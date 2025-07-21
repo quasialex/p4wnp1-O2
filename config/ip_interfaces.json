@@ -1,0 +1,4 @@
+{
+  "WiFi": ["wlan*"],
+  "USB/Victim": ["usb*", "eth*", "enx*"]
+}
