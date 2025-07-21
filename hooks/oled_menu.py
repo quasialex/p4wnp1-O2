@@ -19,10 +19,17 @@ FONT = ImageFont.load_default()
 DELAY_AFTER_RUN = 3  # seconds
 
 # === OLED Init ===
-# === GPIO Exit Setup ===
-EXIT_PIN = 20  # GPIO20 (joystick center press)
+# GPIO pin mappings taken from FuocomanSap/P4wnp1-ALOA-Menu-Reworked
+UP_PIN = 6
+DOWN_PIN = 19
+LEFT_PIN = 5
+RIGHT_PIN = 26
+SELECT_PIN = 13
+EXIT_PIN = 20  # dedicated exit/back button
+
 GPIO.setmode(GPIO.BCM)
-GPIO.setup(EXIT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+for pin in (UP_PIN, DOWN_PIN, LEFT_PIN, RIGHT_PIN, SELECT_PIN, EXIT_PIN):
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 exit_flag = threading.Event()
 
@@ -38,6 +45,19 @@ def monitor_exit_button():
         else:
             pressed_time = 0
         time.sleep(0.1)
+
+def get_button():
+    if GPIO.input(UP_PIN) == GPIO.LOW:
+        return 'up'
+    if GPIO.input(DOWN_PIN) == GPIO.LOW:
+        return 'down'
+    if GPIO.input(LEFT_PIN) == GPIO.LOW:
+        return 'left'
+    if GPIO.input(RIGHT_PIN) == GPIO.LOW:
+        return 'right'
+    if GPIO.input(SELECT_PIN) == GPIO.LOW:
+        return 'select'
+    return None
 
 serial = i2c(port=1, address=0x3C)
 device = sh1106(serial)
@@ -111,36 +131,47 @@ def menu_loop(menu_stack):
         name = item.get("name", "Unnamed")
 
         show(f"> {name}")
-        time.sleep(1)
+
+        btn = None
+        while not btn and not exit_flag.is_set():
+            btn = get_button()
+            time.sleep(0.1)
+
+        if exit_flag.is_set():
+            break
 
         try:
-            if "submenu" in item:
-                submenu = item["submenu"] + [{"name": "← Back"}]
-                menu_stack.append(submenu)
-                index = 0
+            if btn == 'up':
+                index = (index - 1) % len(menu)
                 continue
-
-            if "action" in item:
-                show("Running...\n" + name)
-                result = run_command(item["action"], label=name.replace(" ", "_"))
-                show(result, DELAY_AFTER_RUN)
-
-            elif "script" in item:
-                script_path = item["script"]
-                if not os.path.exists(script_path):
-                    show(f"✗ Not found\n{script_path}", 2)
+            if btn == 'down':
+                index = (index + 1) % len(menu)
+                continue
+            if btn == 'left':
+                if len(menu_stack) > 1:
+                    menu_stack.pop()
+                    index = 0
+                continue
+            if btn in ('right', 'select'):
+                if 'submenu' in item:
+                    submenu = item['submenu'] + [{"name": "← Back"}]
+                    menu_stack.append(submenu)
+                    index = 0
                     continue
-                show("Running...\n" + name)
-                result = run_command(f"bash {script_path}", label=name.replace(" ", "_"))
-                show(result, DELAY_AFTER_RUN)
-
-            index = (index + 1) % len(menu)
+                if 'action' in item:
+                    show("Running...\n" + name)
+                    result = run_command(item['action'], label=name.replace(" ", "_"))
+                    show(result, DELAY_AFTER_RUN)
+                elif 'script' in item:
+                    script_path = item['script']
+                    if not os.path.exists(script_path):
+                        show(f"✗ Not found\n{script_path}", 2)
+                        continue
+                    show("Running...\n" + name)
+                    result = run_command(f"bash {script_path}", label=name.replace(" ", "_"))
+                    show(result, DELAY_AFTER_RUN)
 
         except KeyboardInterrupt:
-            if len(menu_stack) > 1 and index == len(menu) - 1:
-                menu_stack.pop()
-                index = 0
-                continue
             show("Exiting...")
             GPIO.cleanup()
             break

@@ -79,6 +79,18 @@ sudo python3 /opt/p4wnp1/hooks/oled_menu.py
 
 > Requires: `luma.oled`, joystick/button GPIO mapping, and Waveshare 1.3" OLED setup.
 
+### 🌐 Web Interface
+
+A lightweight Flask-based web UI is included. It lists available payloads and lets you trigger them remotely.
+
+Start the server:
+
+```bash
+sudo python3 /opt/p4wnp1/webui/server.py
+```
+
+Then browse to `http://<pi-ip>:8080`.
+
 ---
 
 ### 💻 USB Ethernet Access (`g_ether`) – macOS/Linux
