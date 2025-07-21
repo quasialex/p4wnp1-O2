@@ -21,9 +21,26 @@ def static_proxy(path):
 
 @app.route('/api/payloads')
 def payloads():
+    """Return mapping of available payloads and metadata."""
     with open(CFG) as f:
         data = json.load(f)
-    return jsonify(list(data.keys()))
+    return jsonify(data)
+
+@app.route('/api/payloads/<name>', methods=['PATCH'])
+def update_payload(name):
+    """Update payload properties e.g. enabled flag."""
+    with open(CFG) as f:
+        data = json.load(f)
+    if name not in data:
+        return "Not found", 404
+    payload = data[name]
+    updates = request.get_json(force=True) or {}
+    if 'enabled' in updates:
+        payload['enabled'] = bool(updates['enabled'])
+    data[name] = payload
+    with open(CFG, 'w') as f:
+        json.dump(data, f, indent=2)
+    return '', 204
 
 @app.route('/api/run/<payload>', methods=['POST'])
 def run_payload(payload):
