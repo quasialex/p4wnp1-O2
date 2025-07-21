@@ -34,7 +34,7 @@
     ]
   },
   {
-    "name": "Shell",
+    "name": "Shell Access",
     "submenu": [
       { "name": "Start Serial Shell", "script": "/opt/p4wnp1/payloads/shell/reverse_to_host.sh"},
       { "name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
