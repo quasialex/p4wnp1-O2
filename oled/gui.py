@@ -1,8 +1,11 @@
+#!/usr/bin/env python3
 # oled/gui.py
 import json
 import os
 import subprocess
 import time
+
+BASE_DIR = os.getenv("P4WN_HOME", "/opt/p4wnp1")
 
 try:
     import RPi.GPIO as GPIO
