@@ -101,9 +101,9 @@ def read_menu():
 def menu_loop(menu_stack):
     index = 0
     while not exit_flag.is_set():
-    check_menu_reload()
         updated_menu = check_menu_reload()
-        if updated_menu: menu_stack[-1] = updated_menu
+        if updated_menu:
+            menu_stack[-1] = updated_menu
         menu = menu_stack[-1]
         item = menu[index]
         name = item.get("name", "Unnamed")
