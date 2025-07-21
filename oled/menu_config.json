@@ -120,8 +120,7 @@
       "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"
     }
   ]
-}
-
+},
   {
     "name": "Mass Storage Injector",
     "script": "/opt/p4wnp1-o2/payloads/mass_storage.sh"
@@ -138,5 +137,9 @@
         "action": "sudo poweroff"
       }
     ]
+  },
+  { 
+    "name": "Show IP", 
+    "script": "/opt/p4wnp1-o2/oled/show_ip.py" 
   }
 ]
