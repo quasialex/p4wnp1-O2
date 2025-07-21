@@ -38,7 +38,6 @@ def monitor_exit_button():
             pressed_time = 0
         time.sleep(0.1)
 
-threading.Thread(target=monitor_exit_button, daemon=True).start()
 serial = i2c(port=1, address=0x3C)
 device = sh1106(serial)
 
@@ -48,6 +47,8 @@ def show(text, duration=0):
         draw.text((0, 0), text, font=FONT, fill=255)
     if duration > 0:
         time.sleep(duration)
+
+threading.Thread(target=monitor_exit_button, daemon=True).start()
 
 def run_command(cmd, label="output"):
     try:
