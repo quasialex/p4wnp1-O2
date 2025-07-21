@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>P4wnP1-O2 Control</title>
+    <link href="https://cdn.jsdelivr.net/npm/quasar@1.22.10/dist/quasar.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quasar@1.22.10/dist/quasar.umd.min.js"></script>
+</head>
+<body>
+<div id="q-app">
+    <q-layout view="hHh Lpr lff">
+        <q-header elevated class="bg-primary text-white">
+            <q-toolbar>
+                <q-toolbar-title>P4wnP1-O2 Web UI</q-toolbar-title>
+            </q-toolbar>
+        </q-header>
+        <q-page-container>
+            <q-page class="q-pa-md">
+                <q-btn label="Refresh" color="primary" @click="fetchPayloads"></q-btn>
+                <q-list bordered class="q-mt-md">
+                    <q-item v-for="p in payloads" :key="p">
+                        <q-item-section>{{ p }}</q-item-section>
+                        <q-item-section side>
+                            <q-btn dense color="secondary" label="Run" @click="runPayload(p)"></q-btn>
+                        </q-item-section>
+                    </q-item>
+                </q-list>
+            </q-page>
+        </q-page-container>
+    </q-layout>
+</div>
+<script src="main.js"></script>
+</body>
+</html>
