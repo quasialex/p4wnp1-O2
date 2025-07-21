@@ -2,3 +2,6 @@
 folder       = "captures"
 max_size_mb  = 10
 max_age_s    = 300
+[pipeline.crack]
+auto       = true
+wordlists  = ["~/wordlists/rockyou.txt"]
