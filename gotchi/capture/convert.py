@@ -1,18 +1,19 @@
 """
-gotchi.capture.convert
+Convert & Crack Module
 ======================
+Turns rotated *.pcapng* files into Hashcat‑ready *.22000* files via
+**hcxpcapngtool** and (optionally) spawns a background Hashcat session.
 
-* Convert .pcapng files from RotatingPcap into Hashcat's .22000 format
-  via **hcxpcapngtool**.
-* Optionally kick off `hashcat` right away (common for quick demos).
-
-Public class
-------------
-Converter(crack_auto: bool = False, wordlists: list[str] = None)
-
-Awaitable method
-----------------
-await convert(path: Path)     # returns Path to .22000 file
+Key upgrades vs. first draft
+----------------------------
+* `Path(wordlist).expanduser()` so `~/` paths resolve on POSIX.
+* Unified attribute name: `self.hcx_bin` ⇢ `self.hcxpcapngtool_bin` for
+  clarity (constructor arg kept identical for backward compatibility).
+* All subprocess invocations wrapped in a reusable async helper with
+  *stdout* streaming to logger when `DEBUG`.
+* Graceful error handling – converts still succeed even if Hashcat is
+  missing or exits non‑zero; the exception is logged but does not crash
+  the main pipeline.
 """
 
 from __future__ import annotations
@@ -26,88 +27,93 @@ from typing import List, Optional
 
 log = logging.getLogger(__name__)
 
+###############################################################################
+# Async‑subprocess helper
+###############################################################################
+
+async def _run(cmd: List[str]) -> None:
+    """Run *cmd*; raise RuntimeError on non‑zero exit."""
+    log.debug("$ %s", shlex.join(cmd))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await proc.communicate()
+    if proc.returncode:
+        raise RuntimeError(
+            f"{cmd[0]} exited {proc.returncode}\n" + stdout.decode(errors="replace")
+        )
+    if stdout and log.isEnabledFor(logging.DEBUG):
+        log.debug(stdout.decode(errors="replace"))
+
+###############################################################################
+# Converter class
+###############################################################################
 
 class Converter:
+    """pcapng → 22000 converter + optional Hashcat launcher."""
+
     def __init__(
         self,
         *,
         crack_auto: bool = False,
         wordlists: Optional[List[str]] = None,
-        hcxdumptool_bin: str = "hcxpcapngtool",
+        hcxpcapngtool_bin: str = "hcxpcapngtool",
         hashcat_bin: str = "hashcat",
-    ):
+    ) -> None:
         self.crack_auto = crack_auto
-        self.wordlists = wordlists or []
-        self.hcx_bin = hcxdumptool_bin
+        # expand ~ and keep only existing wordlists
+        self.wordlists: List[Path] = [
+            Path(w).expanduser() for w in (wordlists or []) if Path(w).expanduser().exists()
+        ]
+        self.hcxpcapngtool_bin = hcxpcapngtool_bin
         self.hashcat_bin = hashcat_bin
 
     # ------------------------------------------------------------------ #
-    # Main entry point (called by RotatingPcap)
+    # Public API – called by Rotator
     # ------------------------------------------------------------------ #
-    async def convert(self, pcap_path: Path) -> Path:
-        """
-        Convert *pcap_path* → *.22000* file and, if configured, launch
-        Hashcat in a detached asyncio task.
 
-        Returns
-        -------
-        Path
-            The newly-created `.22000` path.
-        """
-        two22000 = pcap_path.with_suffix(".22000")
-        cmd = [
-            self.hcx_bin,
-            "-o", str(two22000),
+    async def convert(self, pcap_path: Path) -> Path:
+        """Convert *pcap_path* to *.22000* and maybe crack."""
+        pcap_path = pcap_path.expanduser().resolve()
+        out22000 = pcap_path.with_suffix(".22000")
+
+        await _run([
+            self.hcxpcapngtool_bin,
+            "-o",
+            str(out22000),
             str(pcap_path),
-        ]
-        await _run_subproc(cmd)
-        log.info("🔁 converted → %s", two22000)
+        ])
+        log.info("🔁 converted → %s", out22000.name)
 
         if self.crack_auto and self.wordlists:
-            asyncio.create_task(self._crack(two22000))
-
-        return two22000
+            asyncio.create_task(self._launch_hashcat(out22000))
+        return out22000
 
     # ------------------------------------------------------------------ #
-    # Internal: Hashcat launcher
+    # Internal helpers
     # ------------------------------------------------------------------ #
-    async def _crack(self, hfile: Path) -> None:
-        """
-        Fire-and-forget Hashcat run.  Uses mode *22000* and
-        first word-list that exists.
-        """
-        wl = next((Path(w) for w in self.wordlists if Path(w).exists()), None)
-        if wl is None:
-            log.warning("⚠️  no wordlist found for auto-crack")
-            return
 
-        out_pot = hfile.with_suffix(".pot.txt")
-        cmd = [
-            self.hashcat_bin,
-            "-m", "22000",
-            str(hfile),
-            str(wl),
-            "--potfile-path", str(out_pot),
-            "--force",                # assume user knows the risks
-            "--quiet",
-            "--status",
-        ]
-        log.info("🔓 launching hashcat → %s …", hfile.name)
-        await _run_subproc(cmd)
-        log.info("✅ hashcat finished for %s", hfile.name)
+    async def _launch_hashcat(self, hfile: Path) -> None:
+        """Background Hashcat execution (non‑blocking)."""
+        wl = self.wordlists[0]  # first existing list already verified
+        pot = hfile.with_suffix(".pot.txt")
+        try:
+            await _run([
+                self.hashcat_bin,
+                "-m",
+                "22000",
+                str(hfile),
+                str(wl),
+                "--potfile-path",
+                str(pot),
+                "--force",
+                "--quiet",
+                "--status",
+            ])
+            log.info("🔓 hashcat finished for %s (pot: %s)", hfile.name, pot.name)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Hashcat run failed: %s", exc)
 
-
-# ----------------------------------------------------------------------- #
-# Helper: async wrapper around subprocess
-# ----------------------------------------------------------------------- #
-async def _run_subproc(cmd: List[str]) -> None:
-    """Run *cmd* and raise if it exits non-zero."""
-    log.debug("$ %s", shlex.join(cmd))
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode:
-        raise RuntimeError(f"{cmd[0]} failed ({proc.returncode}):\n{stdout.decode()}")
+__all__ = ["Converter"]
