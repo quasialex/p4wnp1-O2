@@ -2,141 +2,53 @@
   {
     "name": "HID Attacks",
     "submenu": [
-      {
-        "name": "PowerShell Reverse Shell",
-        "script": "/opt/p4wnp1-o2/payloads/hid/reverse_shell.ps1"
-      },
-      {
-        "name": "USB Stealer",
-        "script": "/opt/p4wnp1-o2/payloads/hid/usb_stealer.ps1"
-      },
-      {
-        "name": "Domain Enumerator",
-        "script": "/opt/p4wnp1-o2/payloads/hid/domain_enum.ps1"
-      },
-      {
-        "name": "Lockpicker",
-        "script": "/opt/p4wnp1-o2/payloads/hid/lockpicker.ps1"
-      },
-      {
-        "name": "Test Typing",
-        "script": "/opt/p4wnp1-o2/payloads/hid/test_typing.ps1"
-      }
+      {"name": "PowerShell Reverse Shell", "script": "/opt/p4wnp1/payloads/hid/reverse_shell.ps1"},
+      {"name": "USB Stealer", "script": "/opt/p4wnp1/payloads/hid/usb_stealer.ps1"},
+      {"name": "Domain Enumerator", "script": "/opt/p4wnp1/payloads/hid/domain_enum.ps1"},
+      {"name": "Lockpicker", "script": "/opt/p4wnp1/payloads/hid/lockpicker.ps1"},
+      {"name": "Test Typing", "script": "/opt/p4wnp1/payloads/hid/test_typing.ps1"}
     ]
   },
   {
     "name": "Network Attacks",
     "submenu": [
-      {
-        "name": "Rogue DHCP + DNS",
-        "script": "/opt/p4wnp1-o2/payloads/network/rogue_dhcp_dns.sh"
-      },
-      {
-        "name": "DNS Spoof & Redirect",
-        "script": "/opt/p4wnp1-o2/payloads/network/dns_spoof_redirect.sh"
-      },
-      {
-        "name": "Responder Attack",
-        "script": "/opt/p4wnp1-o2/payloads/network/responder_attack.sh"
-      },
-      {
-        "name": "Credential Snarf + Spoof",
-        "script": "/opt/p4wnp1-o2/payloads/network/credsnarf_spoof.sh"
-      }
+      {"name": "Rogue DHCP + DNS", "script": "/opt/p4wnp1/payloads/network/rogue_dhcp_dns.sh"},
+      {"name": "DNS Spoof & Redirect", "script": "/opt/p4wnp1/payloads/network/dns_spoof_redirect.sh"},
+      {"name": "Responder Attack", "script": "/opt/p4wnp1/payloads/network/responder_attack.sh"},
+      {"name": "Credential Snarf + Spoof", "script": "/opt/p4wnp1/payloads/network/credsnarf_spoof.sh"}
     ]
   },
   {
     "name": "Listeners",
     "submenu": [
-      {
-        "name": "Reverse Shell Listener",
-        "script": "/opt/p4wnp1-o2/payloads/listeners/revshell_listener.sh"
-      },
-      {
-        "name": "HID Backdoor Listener",
-        "script": "/opt/p4wnp1-o2/payloads/listeners/hid_backdoor.sh"
-      }
+      {"name": "Reverse Shell Listener", "script": "/opt/p4wnp1/payloads/listeners/revshell_listener.sh"},
+      {"name": "HID Backdoor Listener", "script": "/opt/p4wnp1/payloads/listeners/hid_backdoor.sh"}
     ]
   },
   {
     "name": "USB Gadgets",
     "submenu": [
-      {
-        "name": "HID only",
-        "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh hid"
-      },
-      {
-        "name": "Ethernet only",
-        "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh eth"
-      },
-      {
-        "name": "HID + ETH + Storage",
-        "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh multi"
-      }
+      {"name": "HID only", "action": "/opt/p4wnp1/hooks/select_gadget.sh hid"},
+      {"name": "Ethernet only", "action": "/opt/p4wnp1/hooks/select_gadget.sh eth"},
+      {"name": "HID + ETH + Storage", "action": "/opt/p4wnp1/hooks/select_gadget.sh multi"}
     ]
   },
   {
     "name": "Shell Access",
     "submenu": [
-      {
-        "name": "Start Serial Shell",
-        "script": "/opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
-      },
-      {
-        "name": "Stop Serial Shell",
-        "action": "sudo systemctl stop serial-getty@ttyGS0.service"
-      },
-      {
-        "name": "Start Tmux Shell (USB-Ethernet)",
-        "script": "/opt/p4wnp1-o2/payloads/shell/start_tmux_shell.sh"
-      },
-      {
-       "name": "Stop Tmux Shell",
-       "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"
-     }
-     {
-       "name": "Reverse Shell to Host",
-       "action": "bash /opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
-     }
+      {"name": "Start Serial Shell", "script": "/opt/p4wnp1/payloads/shell/reverse_to_host.sh"},
+      {"name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service"},
+      {"name": "Start Tmux Shell (USB-Ethernet)", "script": "/opt/p4wnp1/payloads/shell/start_tmux_shell.sh"},
+      {"name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"},
+      {"name": "Reverse Shell to Host", "action": "bash /opt/p4wnp1/payloads/shell/reverse_to_host.sh"}
     ]
   },
-  {
-  "name": "Shell",
-  "submenu": [
-    {
-      "name": "Start Serial Shell",
-      "script": "/opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
-    },
-    {
-      "name": "Stop Serial Shell",
-      "action": "sudo systemctl stop serial-getty@ttyGS0.service"
-    },
-    {
-      "name": "Start Tmux Shell (USB-Ethernet)",
-      "script": "/opt/p4wnp1-o2/payloads/shell/start_tmux_shell.sh"
-    },
-    {
-      "name": "Stop Tmux Shell",
-      "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"
-    }
-  ]
-}
-
-  {
-    "name": "Mass Storage Injector",
-    "script": "/opt/p4wnp1-o2/payloads/mass_storage.sh"
-  },
+  {"name": "Mass Storage Injector", "script": "/opt/p4wnp1/payloads/mass_storage.sh"},
   {
     "name": "System",
     "submenu": [
-      {
-        "name": "Reboot",
-        "action": "sudo reboot"
-      },
-      {
-        "name": "Shutdown",
-        "action": "sudo poweroff"
-      }
+      {"name": "Reboot", "action": "sudo reboot"},
+      {"name": "Shutdown", "action": "sudo poweroff"}
     ]
   }
 ]

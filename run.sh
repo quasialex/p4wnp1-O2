@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # === Config ===
-P4WN_HOME="/opt/p4wnp1"
+# Allow overriding the project location via P4WN_HOME
+P4WN_HOME="${P4WN_HOME:-/opt/p4wnp1}"
 ACTIVE_PAYLOAD="$P4WN_HOME/config/active_payload"
 PAYLOADS_DIR="$P4WN_HOME/payloads"
 LOG="$P4WN_HOME/logs/runner.log"

