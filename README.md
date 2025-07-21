@@ -81,13 +81,79 @@ sudo python3 /opt/p4wnp1/hooks/oled_menu.py
 
 ---
 
+### 💻 USB Ethernet Access (`g_ether`) – macOS/Linux
+
+This method allows full SSH access to your Pi Zero 2 W using only a single USB cable — no Wi-Fi or HDMI needed.
+
+#### 🧩 Prerequisites
+
+* Raspberry Pi Zero or Zero 2 W (must support OTG)
+* A **data-capable micro-USB cable**
+* Raspberry Pi OS Bookworm or Kali Linux (headless CLI build)
+
+#### 🔧 Setup Instructions
+
+1. **Enable USB OTG overlay**
+   Edit `/boot/firmware/config.txt` and add:
+
+   ```ini
+   dtoverlay=dwc2
+   ```
+
+2. **Enable USB Ethernet gadget**
+   Edit `/boot/firmware/cmdline.txt` (must be one line), and add after `rootwait`:
+
+   ```text
+   modules-load=dwc2,g_ether
+   ```
+
+3. **Assign static IP to the Pi's USB interface**
+   Create `/etc/network/interfaces.d/usb0`:
+
+   ```ini
+   auto usb0
+   iface usb0 inet static
+       address 192.168.7.2
+       netmask 255.255.255.0
+   ```
+
+4. **Reboot**, then connect the Pi to your Mac via the USB (data) port.
+
+5. **Configure macOS USB interface:**
+
+   * Go to **System Settings > Network**
+   * A new interface should appear (e.g., *RNDIS/Ethernet Gadget*)
+   * Set **Manual IP**:
+
+     * IP: `192.168.7.1`
+     * Subnet: `255.255.255.0`
+     * Router: *(leave blank)*
+
+6. **SSH into the Pi**
+
+   ```bash
+   ssh pi@192.168.7.2
+   ```
+
+---
+
+#### ⚠️ USB Cable Warning
+
+Many micro-USB cables are **charge-only** and do **not support data transfer**. If the Pi powers up but no new interface appears on macOS:
+
+* Try a cable known to support **file transfer** (e.g., with Android phones)
+* Recommended brands: **Anker**, **UGREEN**, **Raspberry Pi Official Cable**
+* Avoid cables labeled “Fast Charging Only”
+
+---
+
 ## 🛠 Requirements
 
-* Raspberry Pi Zero 2 W
+* Raspberry Pi Zero or Zero 2 W
 * Kali Linux ARM image (Zero/Zero2W build)
-* USB OTG port (USB gadget support enabled)
-* Waveshare 1.3" 128x64 OLED HAT
-* Optional: UPS Hat or custom enclosure for mobile rigs
+* USB OTG capability — use the **“USB” port**, not the “PWR” port (supports gadget mode)
+* Waveshare 1.3" 128x64 OLED HAT (SH1106, i2c)
+* Optional: UPS Hat or custom enclosure for portable/stealth use
 
 ---
 
