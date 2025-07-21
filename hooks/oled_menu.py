@@ -65,6 +65,7 @@ def read_menu():
 def menu_loop(menu_stack):
     index = 0
     while True:
+    check_menu_reload()
         menu = menu_stack[-1]
         item = menu[index]
         name = item.get("name", "Unnamed")
