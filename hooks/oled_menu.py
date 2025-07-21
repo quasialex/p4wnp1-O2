@@ -4,6 +4,8 @@ import json
 import subprocess
 import os
 import time
+import threading
+import RPi.GPIO as GPIO
 from luma.core.interface.serial import i2c
 from luma.oled.device import sh1106
 from luma.core.render import canvas
@@ -16,6 +18,27 @@ FONT = ImageFont.load_default()
 DELAY_AFTER_RUN = 3  # seconds
 
 # === OLED Init ===
+# === GPIO Exit Setup ===
+EXIT_PIN = 20  # GPIO20 (joystick center press)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(EXIT_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+exit_flag = threading.Event()
+
+def monitor_exit_button():
+    pressed_time = 0
+    while not exit_flag.is_set():
+        if GPIO.input(EXIT_PIN) == GPIO.LOW:
+            pressed_time += 0.1
+            if pressed_time >= 2:
+                show("Exiting OLED...", 2)
+                exit_flag.set()
+                break
+        else:
+            pressed_time = 0
+        time.sleep(0.1)
+
+threading.Thread(target=monitor_exit_button, daemon=True).start()
 serial = i2c(port=1, address=0x3C)
 device = sh1106(serial)
 
@@ -41,6 +64,19 @@ def run_command(cmd, label="output"):
     except Exception as e:
         return f"✗ Error\n{str(e)}"
 
+MENU_MTIME = os.path.getmtime(MENU_CONFIG)
+
+def check_menu_reload():
+    global MENU_MTIME
+    try:
+        new_mtime = os.path.getmtime(MENU_CONFIG)
+        if new_mtime != MENU_MTIME:
+            MENU_MTIME = new_mtime
+            return read_menu()
+    except Exception as e:
+        show(f"Menu reload error:\n{str(e)}", 2)
+    return None
+
 def read_menu():
     def validate_items(items):
         valid = []
@@ -64,8 +100,10 @@ def read_menu():
 
 def menu_loop(menu_stack):
     index = 0
-    while True:
+    while not exit_flag.is_set():
     check_menu_reload()
+        updated_menu = check_menu_reload()
+        if updated_menu: menu_stack[-1] = updated_menu
         menu = menu_stack[-1]
         item = menu[index]
         name = item.get("name", "Unnamed")
@@ -102,6 +140,7 @@ def menu_loop(menu_stack):
                 index = 0
                 continue
             show("Exiting...")
+            GPIO.cleanup()
             break
 
 # === Start
@@ -110,3 +149,4 @@ try:
     menu_loop([top_menu])
 except Exception as e:
     show(f"Fatal error:\n{str(e)}", 3)
+    GPIO.cleanup()
