@@ -1,14 +1,21 @@
 """
-gotchi.capture.rotate
-=====================
+RotatingPcap – robust queue‑aware implementation
+==============================================
+Consumes handshake packets from an ``asyncio.Queue`` and writes them to
+rolling **.pcapng** files using Scapy’s ``PcapNgWriter``.  Rotation is
+triggered by maximum size *or* age, and shutdown is graceful even when
+no further packets arrive.
 
-RotatingPcap
-------------
-
-* Consumes 802.11 packets (from `asyncio.Queue`)
-* Writes to a .pcapng file via Scapy's PcapNgWriter
-* Rotates by **max_size_mb** or **max_age_s** (whichever occurs first)
-* Calls an async-aware `on_rotate(Path)` callback every time a file closes
+Enhancements vs. original stub
+------------------------------
+* **Non‑blocking queue reads** – `asyncio.wait_for(..., timeout)` prevents the
+  coroutine from hanging forever once `stop()` is called.
+* **Sentinel support** – producers may enqueue ``RotatingPcap.SENTINEL`` to
+  force an immediate final flush/close.
+* **Monotonic timers** – uses ``time.perf_counter()`` for age calculations,
+  immune to system‑clock jumps.
+* **Guaranteed writer flush** – every close/rotate path calls
+  ``writer.flush()`` before ``close()``.
 """
 
 from __future__ import annotations
@@ -16,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
@@ -28,34 +34,24 @@ except ImportError as exc:  # pragma: no cover
         "Scapy is required for capture.rotate → `pip install scapy`"
     ) from exc
 
-
 log = logging.getLogger(__name__)
 
 
 class RotatingPcap:
-    """
-    Parameters
-    ----------
-    folder
-        Destination folder (will be created).
-    max_size_mb
-        Maximum file size before rotation (MiB).
-    max_age_s
-        Maximum file age before rotation (seconds).
-        Use 0 or ``None`` to disable time-based rotation.
-    on_rotate
-        Callable invoked **after** a file is closed.  Accepts `Path`.
-        Can be async or sync.
-    """
+    """Write packets to rolling *.pcapng* files."""
 
     FILE_FMT = "%Y-%m-%d_%H%M%S"  # e.g. 2025-07-21_142359.pcapng
+    SENTINEL = object()            # queue marker → finish early
 
+    # ------------------------------------------------------------------ #
+    # Construction
+    # ------------------------------------------------------------------ #
     def __init__(
         self,
         *,
         folder: Path,
         max_size_mb: int = 10,
-        max_age_s: int | float | None = 300,
+        max_age_s: float | None = 300,
         on_rotate: Optional[Callable[[Path], Awaitable[None] | None]] = None,
     ) -> None:
         self.folder: Path = folder.expanduser().resolve()
@@ -69,71 +65,89 @@ class RotatingPcap:
         self._current_path: Optional[Path] = None
         self._start_t: float = 0.0
         self._bytes: int = 0
+        self._pkt_count: int = 0
 
         self._stop_evt = asyncio.Event()
 
-    # ───────────────────────── public API ───────────────────────── #
-
-    async def consume(self, queue: asyncio.Queue) -> None:
-        """
-        Coroutine: call inside `asyncio.create_task()`.
-
-        Example
-        -------
-        >>> rot = RotatingPcap(folder=Path("captures"), max_size_mb=5)
-        >>> asyncio.create_task(rot.consume(pkt_queue))
-        """
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+    async def consume(self, queue: asyncio.Queue):
+        """Coroutine – create via ``asyncio.create_task(rot.consume(q))``."""
         self._open_new_file()
 
         while not self._stop_evt.is_set():
-            pkt = await queue.get()
+            try:
+                pkt = await asyncio.wait_for(queue.get(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+
+            if pkt is self.SENTINEL:
+                log.debug("RotatingPcap received sentinel – finishing …")
+                queue.task_done()
+                break
+
             self._writer.write(pkt)
             self._bytes += len(bytes(pkt))
+            self._pkt_count += 1
+            queue.task_done()
 
             if self._should_rotate():
                 await self._rotate()
 
-    async def stop(self) -> None:
-        """Gracefully close the current file and stop `consume()`."""
+        await self.stop(final_flush=True)
+
+    async def stop(self, *, final_flush: bool = False):
+        """Close writer and invoke callback. Safe to call multiple times."""
+        if self._stop_evt.is_set() and not final_flush:
+            return
         self._stop_evt.set()
+
         if self._writer:
+            self._writer.flush()
             self._writer.close()
-            await self._fire_callback(self._current_path)  # last file
-            log.info("⏹️  RotatingPcap shut down")
+            await self._fire_callback(self._current_path)
+            log.info(
+                "⏹️  pcap writer closed (%d pkts, %s)",
+                self._pkt_count,
+                self._current_path,
+            )
+            self._writer = None
 
-    # ───────────────────────── internals ───────────────────────── #
-
-    # rotation criteria -------------------------------------------------- #
+    # ------------------------------------------------------------------ #
+    # Internals
+    # ------------------------------------------------------------------ #
     def _should_rotate(self) -> bool:
         if self._bytes >= self.max_bytes:
             return True
-        if self.max_age_s and (time.time() - self._start_t) >= self.max_age_s:
+        if self.max_age_s and (time.perf_counter() - self._start_t) >= self.max_age_s:
             return True
         return False
 
     # file handling ------------------------------------------------------ #
-    def _open_new_file(self) -> None:
+    def _open_new_file(self):
         ts = _dt.datetime.now().strftime(self.FILE_FMT)
         path = self.folder / f"{ts}.pcapng"
         writer = PcapNgWriter(str(path), append=False, sync=True)
 
         self._writer = writer
         self._current_path = path
-        self._start_t = time.time()
+        self._start_t = time.perf_counter()
         self._bytes = 0
+        self._pkt_count = 0
 
         log.info("💾 capturing → %s", path)
 
-    async def _rotate(self) -> None:
-        """Close current file, fire callback, open a fresh writer."""
+    async def _rotate(self):
+        """Close current file, invoke callback, start a new one."""
         if self._writer:
+            self._writer.flush()
             self._writer.close()
             await self._fire_callback(self._current_path)
 
         self._open_new_file()
 
-    async def _fire_callback(self, path: Optional[Path]) -> None:
-        """Invoke `on_rotate` (supports both sync & async)."""
+    async def _fire_callback(self, path: Optional[Path]):
         if path is None or self.on_rotate is None:
             return
         try:
@@ -144,9 +158,9 @@ class RotatingPcap:
         except Exception:  # noqa: BLE001
             log.exception("on_rotate callback raised")
 
-    # context-manager sugar (optional) ----------------------------------- #
-    async def __aenter__(self):  # noqa: D401
+    # async‑context helper ---------------------------------------------- #
+    async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):  # noqa: D401
-        await self.stop()
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.stop(final_flush=True)
