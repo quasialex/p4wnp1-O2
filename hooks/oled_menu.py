@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 
 import json
-import subprocess
 import os
-import time
+import subprocess
 import threading
+import time
+
 import RPi.GPIO as GPIO
-from luma.core.interface.serial import i2c
-from luma.oled.device import sh1106
+from luma.core.error import DeviceNotFoundError
+from luma.core.interface.serial import i2c, spi
 from luma.core.render import canvas
+from luma.oled.device import sh1106, ssd1306
 from PIL import ImageFont
 
 # === Config ===
@@ -17,6 +19,16 @@ MENU_CONFIG = os.path.join(P4WN_HOME, "oled/menu_config.json")
 LOG_DIR = os.path.join(P4WN_HOME, "logs/")
 FONT = ImageFont.load_default()
 DELAY_AFTER_RUN = 3  # seconds
+
+# Replace {P4WN_HOME} tokens in menu entries
+def replace_tokens(data):
+    if isinstance(data, dict):
+        return {k: replace_tokens(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [replace_tokens(v) for v in data]
+    if isinstance(data, str):
+        return data.replace("{P4WN_HOME}", P4WN_HOME)
+    return data
 
 # === OLED Init ===
 # GPIO pin mappings taken from FuocomanSap/P4wnp1-ALOA-Menu-Reworked
@@ -59,8 +71,12 @@ def get_button():
         return 'select'
     return None
 
-serial = i2c(port=1, address=0x3C)
-device = sh1106(serial)
+try:
+    serial = i2c(port=1, address=0x3C)
+    device = sh1106(serial)
+except DeviceNotFoundError:
+    serial = spi(device=0, port=0)
+    device = ssd1306(serial)
 
 # === Utils ===
 def show(text, duration=0):
@@ -118,6 +134,7 @@ def read_menu():
 
     with open(MENU_CONFIG, 'r') as f:
         raw_menu = json.load(f)
+    raw_menu = replace_tokens(raw_menu)
     return validate_items(raw_menu)
 
 def menu_loop(menu_stack):

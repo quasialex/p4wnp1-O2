@@ -2,48 +2,48 @@
   {
     "name": "HID Attacks",
     "submenu": [
-      {"name": "PowerShell Reverse Shell", "script": "/opt/p4wnp1/payloads/hid/reverse_shell.sh"},
-      {"name": "USB Stealer", "script": "/opt/p4wnp1/payloads/hid/usb_stealer.sh"},
-      {"name": "Domain Enumerator", "script": "/opt/p4wnp1/payloads/hid/domain_enum_hid.sh"},
-      {"name": "Lockpicker", "script": "/opt/p4wnp1/payloads/hid/lockpicker.sh"},
-      {"name": "Test Typing", "script": "/opt/p4wnp1/payloads/hid/test_typing.sh"}
+      {"name": "PowerShell Reverse Shell", "script": "{P4WN_HOME}/payloads/hid/reverse_shell.sh"},
+      {"name": "USB Stealer", "script": "{P4WN_HOME}/payloads/hid/usb_stealer.sh"},
+      {"name": "Domain Enumerator", "script": "{P4WN_HOME}/payloads/hid/domain_enum_hid.sh"},
+      {"name": "Lockpicker", "script": "{P4WN_HOME}/payloads/hid/lockpicker.sh"},
+      {"name": "Test Typing", "script": "{P4WN_HOME}/payloads/hid/test_typing.sh"}
     ]
   },
   {
     "name": "Network Attacks",
     "submenu": [
-      {"name": "Rogue DHCP + DNS", "script": "/opt/p4wnp1/payloads/network/rogue_dhcp_dns.sh"},
-      {"name": "DNS Spoof & Redirect", "script": "/opt/p4wnp1/payloads/network/dns_spoof_redirect.sh"},
-      {"name": "Responder Attack", "script": "/opt/p4wnp1/payloads/network/responder_attack.sh"},
-      {"name": "Credential Snarf + Spoof", "script": "/opt/p4wnp1/payloads/network/credsnarf_spoof.sh"}
+      {"name": "Rogue DHCP + DNS", "script": "{P4WN_HOME}/payloads/network/rogue_dhcp_dns.sh"},
+      {"name": "DNS Spoof & Redirect", "script": "{P4WN_HOME}/payloads/network/dns_spoof_redirect.sh"},
+      {"name": "Responder Attack", "script": "{P4WN_HOME}/payloads/network/responder_attack.sh"},
+      {"name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.sh"}
     ]
   },
   {
     "name": "Listeners",
     "submenu": [
-      {"name": "Reverse Shell Listener", "script": "/opt/p4wnp1/payloads/listeners/revshell_listener.sh"},
-      {"name": "HID Backdoor Listener", "script": "/opt/p4wnp1/payloads/listeners/hid_backdoor.sh"}
+      {"name": "Reverse Shell Listener", "script": "{P4WN_HOME}/payloads/listeners/revshell_listener.sh"},
+      {"name": "HID Backdoor Listener", "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.sh"}
     ]
   },
   {
     "name": "USB Gadgets",
     "submenu": [
-      {"name": "HID only", "action": "/opt/p4wnp1/hooks/select_gadget.sh hid"},
-      {"name": "Ethernet only", "action": "/opt/p4wnp1/hooks/select_gadget.sh eth"},
-      {"name": "HID + ETH + Storage", "action": "/opt/p4wnp1/hooks/select_gadget.sh multi"}
+      {"name": "HID only", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid"},
+      {"name": "Ethernet only", "action": "{P4WN_HOME}/hooks/select_gadget.sh eth"},
+      {"name": "HID + ETH + Storage", "action": "{P4WN_HOME}/hooks/select_gadget.sh multi"}
     ]
   },
   {
     "name": "Shell Access",
     "submenu": [
-      { "name": "Start Serial Shell", "script": "/opt/p4wnp1/payloads/shell/reverse_to_host.sh"},
+      { "name": "Start Serial Shell", "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.sh"},
       { "name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
-      { "name": "Start Tmux Shell (USB-Ethernet)", "script": "/opt/p4wnp1/payloads/shell/start_tmux_shell.sh" },
+      { "name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.sh" },
       { "name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
-      { "name": "Reverse Shell to Host", "action": "bash /opt/p4wnp1/payloads/shell/reverse_to_host.sh" }
+      { "name": "Reverse Shell to Host", "action": "bash {P4WN_HOME}/payloads/shell/reverse_to_host.sh" }
     ]
   },
-  {"name": "Mass Storage Injector", "script": "/opt/p4wnp1/payloads/mass_storage.sh"},
+  {"name": "Mass Storage Injector", "script": "{P4WN_HOME}/payloads/mass_storage.sh"},
   {
     "name": "System",
     "submenu": [
@@ -52,6 +52,6 @@
     ]
   },
   {
-    "name": "Show IP", "script": "/opt/p4wnp1/oled/show_ip.py"
+    "name": "Show IP", "script": "{P4WN_HOME}/oled/show_ip.py"
   }
 ]
