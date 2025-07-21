@@ -1,0 +1,4 @@
+[capture.rotate]
+folder       = "captures"
+max_size_mb  = 10
+max_age_s    = 300
