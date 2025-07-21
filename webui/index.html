@@ -19,10 +19,11 @@
             <q-page class="q-pa-md">
                 <q-btn label="Refresh" color="primary" @click="fetchPayloads"></q-btn>
                 <q-list bordered class="q-mt-md">
-                    <q-item v-for="p in payloads" :key="p">
-                        <q-item-section>{{ p }}</q-item-section>
+                    <q-item v-for="(info, name) in payloads" :key="name">
+                        <q-item-section>{{ name }}</q-item-section>
                         <q-item-section side>
-                            <q-btn dense color="secondary" label="Run" @click="runPayload(p)"></q-btn>
+                            <q-toggle v-model="info.enabled" @input="toggleEnabled(name, info.enabled)" class="q-mr-sm"/>
+                            <q-btn dense color="secondary" label="Run" @click="runPayload(name)" :disable="!info.enabled"></q-btn>
                         </q-item-section>
                     </q-item>
                 </q-list>

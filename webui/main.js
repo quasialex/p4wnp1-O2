@@ -1,11 +1,18 @@
 new Vue({
     el: '#q-app',
     data: {
-        payloads: []
+        payloads: {}
     },
     methods: {
         fetchPayloads() {
             fetch('/api/payloads').then(r => r.json()).then(d => { this.payloads = d; });
+        },
+        toggleEnabled(name, val) {
+            fetch('/api/payloads/' + name, {
+                method: 'PATCH',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: val})
+            });
         },
         runPayload(p) {
             fetch('/api/run/' + p, {method: 'POST'})

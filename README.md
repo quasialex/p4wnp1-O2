@@ -81,7 +81,7 @@ sudo python3 /opt/p4wnp1/hooks/oled_menu.py
 
 ### 🌐 Web Interface
 
-A lightweight Flask-based web UI is included. It lists available payloads and lets you trigger them remotely.
+A lightweight Flask-based web UI is included. It lists available payloads, allows enabling/disabling them and lets you trigger them remotely.
 
 Start the server:
 

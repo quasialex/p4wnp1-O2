@@ -2,11 +2,11 @@
   {
     "name": "HID Attacks",
     "submenu": [
-      {"name": "PowerShell Reverse Shell", "script": "/opt/p4wnp1/payloads/hid/reverse_shell.ps1"},
-      {"name": "USB Stealer", "script": "/opt/p4wnp1/payloads/hid/usb_stealer.ps1"},
-      {"name": "Domain Enumerator", "script": "/opt/p4wnp1/payloads/hid/domain_enum.ps1"},
-      {"name": "Lockpicker", "script": "/opt/p4wnp1/payloads/hid/lockpicker.ps1"},
-      {"name": "Test Typing", "script": "/opt/p4wnp1/payloads/hid/test_typing.ps1"}
+      {"name": "PowerShell Reverse Shell", "script": "/opt/p4wnp1/payloads/hid/reverse_shell.sh"},
+      {"name": "USB Stealer", "script": "/opt/p4wnp1/payloads/hid/usb_stealer.sh"},
+      {"name": "Domain Enumerator", "script": "/opt/p4wnp1/payloads/hid/domain_enum_hid.sh"},
+      {"name": "Lockpicker", "script": "/opt/p4wnp1/payloads/hid/lockpicker.sh"},
+      {"name": "Test Typing", "script": "/opt/p4wnp1/payloads/hid/test_typing.sh"}
     ]
   },
   {
@@ -34,24 +34,15 @@
     ]
   },
   {
-    "name": "Shell Access",
+    "name": "Shell",
     "submenu": [
-      {"name": "Start Serial Shell", "script": "/opt/p4wnp1/payloads/shell/reverse_to_host.sh"},
-      {"name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service"},
-      {"name": "Start Tmux Shell (USB-Ethernet)", "script": "/opt/p4wnp1/payloads/shell/start_tmux_shell.sh"},
-      {"name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'"},
-      {"name": "Reverse Shell to Host", "action": "bash /opt/p4wnp1/payloads/shell/reverse_to_host.sh"}
+      { "name": "Start Serial Shell", "script": "/opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"},
+      { "name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
+      { "name": "Start Tmux Shell (USB-Ethernet)", "script": "/opt/p4wnp1-o2/payloads/shell/start_tmux_shell.sh" },
+      { "name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" }
     ]
   },
   {"name": "Mass Storage Injector", "script": "/opt/p4wnp1/payloads/mass_storage.sh"},
-  {"name": "Shell",
-  "submenu": [
-    { "name": "Start Serial Shell", "script": "/opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"},
-    { "name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
-    { "name": "Start Tmux Shell (USB-Ethernet)", "script": "/opt/p4wnp1-o2/payloads/shell/start_tmux_shell.sh" },
-    { "name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" }
-    ]
-   },
   {
     "name": "System",
     "submenu": [
@@ -59,7 +50,7 @@
       {"name": "Shutdown", "action": "sudo poweroff"}
     ]
   },
-  { 
-    "name": "Show IP", "script": "/opt/p4wnp1-o2/oled/show_ip.py" 
+  {
+    "name": "Show IP", "script": "/opt/p4wnp1/oled/show_ip.py"
   }
 ]
