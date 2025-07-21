@@ -1,6 +1,8 @@
 #!/bin/bash
-# Listens for reverse shell on TCP port 4444
 
-PORT=4444
-echo "[+] Listening on port $PORT for reverse shell..."
-sudo nc -lvnp $PORT
+CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
+[ -f "$CONFIG" ] && source "$CONFIG"
+
+PORT="${RS_PORT:-4444}"
+echo "[*] Listening on TCP port $PORT..."
+nc -lvnp "$PORT"
