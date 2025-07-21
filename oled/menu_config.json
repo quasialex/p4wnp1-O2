@@ -1,4 +1,3 @@
-(
 [
   {
     "name": "HID Attacks",
@@ -73,6 +72,23 @@
       {
         "name": "HID + ETH + Storage",
         "action": "/opt/p4wnp1-o2/hooks/select_gadget.sh multi"
+      }
+    ]
+  },
+  {
+    "name": "Shell Access",
+    "submenu": [
+      {
+        "name": "Serial Shell (ttyGS0)",
+        "action": "sudo systemctl start serial-getty@ttyGS0.service"
+      },
+      {
+        "name": "Tmux Shell (USB-Ethernet)",
+        "action": "tmux new-session -d -s oledshell"
+      },
+      {
+        "name": "Reverse Shell to Host",
+        "action": "bash /opt/p4wnp1-o2/payloads/shell/reverse_to_host.sh"
       }
     ]
   },
