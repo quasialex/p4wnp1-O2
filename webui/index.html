@@ -14,9 +14,13 @@
             <q-toolbar>
                 <q-toolbar-title>P4wnP1-O2 Web UI</q-toolbar-title>
             </q-toolbar>
+            <q-tabs v-model="tab" class="text-white" inline-label>
+                <q-tab name="payloads" label="Payloads" />
+                <q-tab name="log" label="Run Log" />
+            </q-tabs>
         </q-header>
         <q-page-container>
-            <q-page class="q-pa-md">
+            <q-page v-show="tab === 'payloads'" class="q-pa-md">
                 <q-btn label="Refresh" color="primary" @click="fetchPayloads"></q-btn>
                 <q-list bordered class="q-mt-md">
                     <q-item v-for="(info, name) in payloads" :key="name">
@@ -27,6 +31,12 @@
                         </q-item-section>
                     </q-item>
                 </q-list>
+            </q-page>
+            <q-page v-show="tab === 'log'" class="q-pa-md">
+                <q-btn label="Refresh" color="primary" @click="fetchLog"></q-btn>
+                <q-scroll-area class="q-mt-md" style="height:400px">
+                    <pre>{{ logText }}</pre>
+                </q-scroll-area>
             </q-page>
         </q-page-container>
     </q-layout>

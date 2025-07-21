@@ -8,6 +8,7 @@ BASE_DIR = os.getenv('P4WN_HOME', '/opt/p4wnp1')
 CFG = os.path.join(BASE_DIR, 'config/payload.json')
 ACTIVE = os.path.join(BASE_DIR, 'config/active_payload')
 RUNNER = os.path.join(BASE_DIR, 'run_payload.sh')
+LOG_FILE = os.path.join(BASE_DIR, 'logs/runner.log')
 
 app = Flask(__name__, static_folder=os.path.dirname(__file__))
 
@@ -48,6 +49,20 @@ def run_payload(payload):
         f.write(payload)
     result = subprocess.run(['bash', RUNNER], capture_output=True, text=True)
     return result.stdout + result.stderr
+
+@app.route('/api/log')
+def get_log():
+    """Return the tail of the runner log."""
+    lines = request.args.get('lines', 100)
+    try:
+        lines = int(lines)
+    except ValueError:
+        lines = 100
+    if not os.path.exists(LOG_FILE):
+        return ""
+    with open(LOG_FILE) as f:
+        data = f.readlines()
+    return ''.join(data[-lines:])
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
