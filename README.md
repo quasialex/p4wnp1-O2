@@ -67,6 +67,13 @@ Run a payload manually:
 sudo bash /opt/p4wnp1/payloads/network/rogue_dhcp_dns.sh
 ```
 
+To execute the currently selected payload (as defined in
+`config/active_payload`), simply run:
+
+```bash
+sudo /opt/p4wnp1/run.sh
+```
+
 ---
 
 ## 📡 OLED Menu (WIP)
