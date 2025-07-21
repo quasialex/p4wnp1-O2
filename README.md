@@ -32,7 +32,7 @@ To remove XFCE GUI and prep a clean, fast Kali headless build:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/quasialex/p4wnp1-zero2w/main/scripts/setup_headless_kali.sh | bash
-````
+```
 
 > ⚠️ Or run manually:
 > `sudo bash scripts/setup_headless_kali.sh`
