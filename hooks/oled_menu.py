@@ -12,8 +12,9 @@ from luma.core.render import canvas
 from PIL import ImageFont
 
 # === Config ===
-MENU_CONFIG = '/opt/p4wnp1-o2/oled/menu_config.json'
-LOG_DIR = '/opt/p4wnp1-o2/logs/'
+P4WN_HOME = os.getenv("P4WN_HOME", "/opt/p4wnp1")
+MENU_CONFIG = os.path.join(P4WN_HOME, "oled/menu_config.json")
+LOG_DIR = os.path.join(P4WN_HOME, "logs/")
 FONT = ImageFont.load_default()
 DELAY_AFTER_RUN = 3  # seconds
 

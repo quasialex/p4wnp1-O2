@@ -1,8 +1,9 @@
 #!/bin/bash
 # Executes the payload selected in active_payload file
 
-CONFIG="/opt/p4wnp1/config/payload.json"
-ACTIVE="/opt/p4wnp1/config/active_payload"
+P4WN_HOME="${P4WN_HOME:-/opt/p4wnp1}"
+CONFIG="$P4WN_HOME/config/payload.json"
+ACTIVE="$P4WN_HOME/config/active_payload"
 
 if [ ! -f "$ACTIVE" ]; then
   echo "[!] No active payload set."
@@ -17,7 +18,7 @@ if [ -z "$PAYLOAD_PATH" ] || [ "$PAYLOAD_PATH" == "null" ]; then
   exit 1
 fi
 
-FULL_PATH="/opt/p4wnp1/$PAYLOAD_PATH"
+FULL_PATH="$P4WN_HOME/$PAYLOAD_PATH"
 echo "[+] Running payload: $PAYLOAD_ID -> $FULL_PATH"
 chmod +x "$FULL_PATH"
 "$FULL_PATH"

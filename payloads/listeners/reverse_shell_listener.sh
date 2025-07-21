@@ -1,6 +1,7 @@
 #!/bin/bash
 
-CONFIG="/opt/p4wnp1-o2/config/reverse_shell.conf"
+P4WN_HOME="${P4WN_HOME:-/opt/p4wnp1}"
+CONFIG="$P4WN_HOME/config/reverse_shell.conf"
 [ -f "$CONFIG" ] && source "$CONFIG"
 
 PORT="${RS_PORT:-4444}"

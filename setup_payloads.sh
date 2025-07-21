@@ -522,8 +522,8 @@ EOF
 ########################################
 echo "[+] Updating OLED payload menu..."
 
-if [ -f /opt/p4wnp1-o2/oled/generate_menu.py ]; then
-  python3 /opt/p4wnp1-o2/oled/generate_menu.py
+if [ -f /opt/p4wnp1/oled/generate_menu.py ]; then
+  python3 /opt/p4wnp1/oled/generate_menu.py
   echo "    ✔ Menu config generated."
 else
   echo "    ⚠ OLED menu generator not found. Skipping."
