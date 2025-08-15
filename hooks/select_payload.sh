@@ -1,20 +1,30 @@
 #!/bin/bash
+set -euo pipefail
+BASE=/opt/p4wnp1
+CFG="$BASE/config/active_payload"
 
-P4WN_HOME="${P4WN_HOME:-/opt/p4wnp1}"
-CFG="$P4WN_HOME/config/payload.json"
+usage(){ echo "Usage: $0 <payload_name>"; exit 1; }
+[[ $# -eq 1 ]] || usage
+NAME="$1"
 
-# List enabled payload IDs from payload.json
-PAYLOADS=$(jq -r 'keys[] as $k | select(.[$k].enabled == true) | $k' "$CFG")
+# Resolve payload path (supports nested categories like hid/<name>.sh)
+CANDIDATES=(
+  "$BASE/payloads/$NAME.sh"
+  "$BASE/payloads/hid/$NAME.sh"
+  "$BASE/payloads/net/$NAME.sh"
+)
+PAYLOAD=""
+for p in "${CANDIDATES[@]}"; do
+  if [[ -f "$p" ]]; then PAYLOAD="$p"; break; fi
+done
 
-echo "Available payloads:"
-printf '%s\n' "$PAYLOADS"
-echo
-read -p "Enter the payload ID to activate: " NEW
-
-# Validate that the ID exists
-if jq -e --arg id "$NEW" '.[$id]?' "$CFG" >/dev/null; then
-  echo "$NEW" > "$P4WN_HOME/config/active_payload"
-  echo "Active payload updated to: $NEW"
-else
-  echo "Invalid selection. No changes made."
+if [[ -z "$PAYLOAD" ]]; then
+  echo "✗ payload not found: $NAME"
+  exit 2
 fi
+
+echo "$PAYLOAD" > "$CFG"
+chmod 644 "$CFG"
+
+echo "✓ active payload set:"
+echo "  $(cat "$CFG")"

@@ -1,5 +1,13 @@
 [
   {
+    "name": "Status",
+    "submenu": [
+      {"name": "Show USB Mode", "script": "{P4WN_HOME}/hooks/status_usb_mode.sh"},
+      {"name": "Show Active Payload", "script": "{P4WN_HOME}/hooks/status_payload.sh"},
+      {"name": "← Back" }
+    ]
+  },
+  {
     "name": "HID Attacks",
     "submenu": [
       {"name": "PowerShell Reverse Shell", "script": "{P4WN_HOME}/payloads/hid/reverse_shell.sh"},
@@ -31,6 +39,7 @@
   {
     "name": "USB Mode",
     "submenu": [
+      {"name": "Current: (read)", "script": "{P4WN_HOME}/hooks/status_usb_mode.sh"},
       {"name": "HID + NET", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid_net_only"},
       {"name": "HID + NET + MSD", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid_storage_net"},
       {"name": "Storage Only", "action": "{P4WN_HOME}/hooks/select_gadget.sh storage_only"},
@@ -50,14 +59,24 @@
   },
   {"name": "Mass Storage Injector", "script": "{P4WN_HOME}/payloads/mass_storage.sh"},
   {
+    "name": "Payloads",
+    "submenu": [
+      {"name": "Current: (read)", "script": "{P4WN_HOME}/hooks/status_payload.sh"},
+      {"name": "Set Payload: reverse_shell", "action": "bash /opt/p4wnp1/hooks/select_payload.sh reverse_shell" },
+      {"name": "Set Payload: autorun_powershell", "action": "bash /opt/p4wnp1/hooks/select_payload.sh autorun_powershell" },
+      {"name": "Set Payload: test_typing", "action": "bash /opt/p4wnp1/hooks/select_payload.sh test_typing" },
+      {"name": "← Back" }
+    ]
+  },
+  {
+    "name": "Show IP", "script": "{P4WN_HOME}/oled/show_ip.py"
+  },
+  {
     "name": "System",
     "submenu": [
       {"name": "Reboot", "action": "sudo reboot"},
       {"name": "Shutdown", "action": "sudo poweroff"},
       {"name": "← Back" }
     ]
-  },
-  {
-    "name": "Show IP", "script": "{P4WN_HOME}/oled/show_ip.py"
   }
 ]

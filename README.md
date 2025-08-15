@@ -31,7 +31,7 @@ Inspired by P4wnP1 A.L.O.A., rebuilt for modern builds with joystick OLED UI, US
 To remove XFCE GUI and prep a clean, fast Kali headless build:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/quasialex/p4wnp1-zero2w/main/scripts/setup_headless_kali.sh | bash
+curl -sSL https://raw.githubusercontent.com/quasialex/p4wnp1-o2/main/scripts/setup_headless_kali.sh | bash
 ```
 
 > ⚠️ Or run manually:
@@ -49,11 +49,13 @@ What it does:
 
 ## 🚀 Usage
 
-Clone the repo:
-
+## Quick install
 ```bash
-git clone https://github.com/quasialex/p4wnp1-zero2w.git /opt/p4wnp1
-```
+git clone https://github.com/quasialex/p4wnp1-o2.git /opt/p4wnp1
+cd p4wnp1
+sudo ./install.sh
+# First time only: reboot to ensure dwc2 loads
+sudo reboot
 
 Run setup:
 
