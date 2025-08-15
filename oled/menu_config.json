@@ -6,7 +6,8 @@
       {"name": "USB Stealer", "script": "{P4WN_HOME}/payloads/hid/usb_stealer.sh"},
       {"name": "Domain Enumerator", "script": "{P4WN_HOME}/payloads/hid/domain_enum_hid.sh"},
       {"name": "Lockpicker", "script": "{P4WN_HOME}/payloads/hid/lockpicker.sh"},
-      {"name": "Test Typing", "script": "{P4WN_HOME}/payloads/hid/test_typing.sh"}
+      {"name": "Test Typing", "script": "{P4WN_HOME}/payloads/hid/test_typing.sh"},
+      {"name": "← Back" }
     ]
   },
   {
@@ -15,32 +16,36 @@
       {"name": "Rogue DHCP + DNS", "script": "{P4WN_HOME}/payloads/network/rogue_dhcp_dns.sh"},
       {"name": "DNS Spoof & Redirect", "script": "{P4WN_HOME}/payloads/network/dns_spoof_redirect.sh"},
       {"name": "Responder Attack", "script": "{P4WN_HOME}/payloads/network/responder_attack.sh"},
-      {"name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.sh"}
+      {"name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.sh"},
+      {"name": "← Back" }
     ]
   },
   {
     "name": "Listeners",
     "submenu": [
       {"name": "Reverse Shell Listener", "script": "{P4WN_HOME}/payloads/listeners/revshell_listener.sh"},
-      {"name": "HID Backdoor Listener", "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.sh"}
+      {"name": "HID Backdoor Listener", "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.sh"},
+      {"name": "← Back" }
     ]
   },
   {
-    "name": "USB Gadgets",
+    "name": "USB Mode",
     "submenu": [
-      {"name": "HID only", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid"},
-      {"name": "Ethernet only", "action": "{P4WN_HOME}/hooks/select_gadget.sh eth"},
-      {"name": "HID + ETH + Storage", "action": "{P4WN_HOME}/hooks/select_gadget.sh multi"}
+      {"name": "HID + NET", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid_net_only"},
+      {"name": "HID + NET + MSD", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid_storage_net"},
+      {"name": "Storage Only", "action": "{P4WN_HOME}/hooks/select_gadget.sh storage_only"},
+      {"name": "← Back" }
     ]
   },
   {
     "name": "Shell Access",
     "submenu": [
-      { "name": "Start Serial Shell", "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.sh"},
-      { "name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
-      { "name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.sh" },
-      { "name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
-      { "name": "Reverse Shell to Host", "action": "bash {P4WN_HOME}/payloads/shell/reverse_to_host.sh" }
+      {"name": "Start Serial Shell", "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.sh"},
+      {"name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
+      {"name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.sh" },
+      {"name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
+      {"name": "Reverse Shell to Host", "action": "bash {P4WN_HOME}/payloads/shell/reverse_to_host.sh" },
+      {"name": "← Back" }
     ]
   },
   {"name": "Mass Storage Injector", "script": "{P4WN_HOME}/payloads/mass_storage.sh"},
@@ -48,7 +53,8 @@
     "name": "System",
     "submenu": [
       {"name": "Reboot", "action": "sudo reboot"},
-      {"name": "Shutdown", "action": "sudo poweroff"}
+      {"name": "Shutdown", "action": "sudo poweroff"},
+      {"name": "← Back" }
     ]
   },
   {

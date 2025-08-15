@@ -1,3 +1,4 @@
+# /etc/systemd/system/oledmenu.service
 [Unit]
 Description=OLED Menu Launcher
 After=multi-user.target
@@ -5,12 +6,12 @@ ConditionPathExists=/opt/p4wnp1/oled/run_oled_menu.sh
 
 [Service]
 Type=simple
+# User=kali        # uncomment if you want to run as user; otherwise run as root
 ExecStart=/opt/p4wnp1/oled/run_oled_menu.sh
 WorkingDirectory=/opt/p4wnp1/oled
 StandardOutput=journal
 StandardError=journal
 Restart=always
-User=pi
 
 [Install]
 WantedBy=multi-user.target

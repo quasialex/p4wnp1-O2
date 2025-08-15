@@ -1,32 +1,32 @@
+# /opt/p4wnp1/hooks/select_gadget.sh
 #!/bin/bash
-# Select and load a USB gadget mode: HID+Storage+RNDIS, HID+RNDIS, or Storage Only
+set -euo pipefail
 
-GADGET_CONFIG_DIR="/opt/p4wnp1/config/usb_gadgets"
+BASE=/opt/p4wnp1
+GADGET=/sys/kernel/config/usb_gadget/p4wnp1
 
-echo "[*] Available USB gadget modes:"
-echo "1) HID + Storage + RNDIS"
-echo "2) HID + RNDIS"
-echo "3) Storage Only"
-echo -n "Select gadget mode [1-3]: "
-read MODE
+usage(){ echo "Usage: $0 {hid_net_only|hid_storage_net|storage_only}"; exit 1; }
+[[ $# -eq 1 ]] || usage
+MODE="$1"
 
 case "$MODE" in
-  1)
-    echo "[+] Loading HID + Storage + RNDIS..."
-    sudo bash "$GADGET_CONFIG_DIR/hid_storage_net.sh"
-    ;;
-  2)
-    echo "[+] Loading HID + RNDIS..."
-    sudo bash "$GADGET_CONFIG_DIR/hid_net_only.sh"
-    ;;
-  3)
-    echo "[+] Loading Storage Only..."
-    sudo bash "$GADGET_CONFIG_DIR/storage_only.sh"
-    ;;
-  *)
-    echo "[!] Invalid selection."
-    exit 1
-    ;;
+  hid_net_only)     SCRIPT="$BASE/config/usb_gadgets/hid_net_only.sh" ;;
+  hid_storage_net)  SCRIPT="$BASE/config/usb_gadgets/hid_storage_net.sh" ;;
+  storage_only)     SCRIPT="$BASE/config/usb_gadgets/storage_only.sh" ;;
+  *) usage ;;
 esac
 
-echo "[✓] Gadget configuration applied."
+# Ensure prerequisites
+modprobe libcomposite 2>/dev/null || true
+if ! lsmod | grep -q dwc2; then
+  # dwc2 is usually loaded via dtoverlay at boot, but try now:
+  modprobe dwc2 2>/dev/null || true
+fi
+
+# If an old gadget exists, tear it down cleanly
+if [[ -d "$GADGET" ]]; then
+  "$BASE/hooks/gadget_reset.sh"
+fi
+
+# Run the selected mode script
+exec "$SCRIPT"

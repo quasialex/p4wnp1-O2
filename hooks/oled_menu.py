@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+import textwrap
 
 import RPi.GPIO as GPIO
 from luma.core.error import DeviceNotFoundError
@@ -87,18 +88,25 @@ def show(text, duration=0):
 
 threading.Thread(target=monitor_exit_button, daemon=True).start()
 
+def item_label(item):
+    """Accept both 'name' and 'title' in menu JSON."""
+    return item.get("name") or item.get("title") or "Unnamed"
+
 def run_command(cmd, label="output"):
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
-        log_file = os.path.join(LOG_DIR, f"{label}.log")
+        # sanitize label for filesystem
+        safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in label)[:64]
+        log_file = os.path.join(LOG_DIR, f"{safe}.log")
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         with open(log_file, 'w') as f:
             f.write(result.stdout + "\n" + result.stderr)
 
         status = "✓ Success" if result.returncode == 0 else "✗ Failed"
-        last_lines = (result.stdout + result.stderr).strip().splitlines()[-2:]
-        feedback = f"{status}\n" + "\n".join(last_lines[-2:])
-        return feedback
+        tail = (result.stdout + result.stderr).strip().splitlines()[-3:]
+        msg = (status + "\n" + "\n".join(tail)).strip()
+        # keep OLED output short
+        return textwrap.shorten(msg, width=180, placeholder="…")
     except Exception as e:
         return f"✗ Error\n{str(e)}"
 
@@ -145,7 +153,7 @@ def menu_loop(menu_stack):
             menu_stack[-1] = updated_menu
         menu = menu_stack[-1]
         item = menu[index]
-        name = item.get("name", "Unnamed")
+        name = item_label(item)
 
         show(f"> {name}")
 
@@ -171,13 +179,13 @@ def menu_loop(menu_stack):
                 continue
             if btn in ('right', 'select'):
                 if 'submenu' in item:
-                    submenu = item['submenu'] + [{"name": "← Back"}]
+                    submenu = item['submenu'] + [{"title": "← Back"}]
                     menu_stack.append(submenu)
                     index = 0
                     continue
                 if 'action' in item:
                     show("Running...\n" + name)
-                    result = run_command(item['action'], label=name.replace(" ", "_"))
+                    result = run_command(item['action'], label=name)
                     show(result, DELAY_AFTER_RUN)
                 elif 'script' in item:
                     script_path = item['script']
@@ -185,7 +193,7 @@ def menu_loop(menu_stack):
                         show(f"✗ Not found\n{script_path}", 2)
                         continue
                     show("Running...\n" + name)
-                    result = run_command(f"bash {script_path}", label=name.replace(" ", "_"))
+                    result = run_command(f"bash {script_path}", label=name)
                     show(result, DELAY_AFTER_RUN)
 
         except KeyboardInterrupt:
