@@ -1,203 +1,308 @@
-# P4wnP1-O2
+# P4wnP1-O2 (draft)
 
-A stealthy, modular payload launcher and HID/network attack framework for Raspberry Pi Zero 2 W.  
-Inspired by P4wnP1 A.L.O.A., rebuilt for modern builds with joystick OLED UI, USB gadget scripts, and clean payloads.
+A stealthy, modular payload launcher and HID/network attack framework for Raspberry Pi Zero / Zero 2 W. Inspired by **P4wnP1 A.L.O.A.**, rebuilt for modern builds with optional OLED UI, USB-gadget scripts, and clean payloads.
+
+> ⚠️ Education & research only. Many payloads have legal/ethical implications. You are responsible for what you run.
 
 ---
 
 ## ✅ Features
 
-- Modular payloads (network, HID, covert shell, Wi-Fi)
-- OLED + joystick menu interface (WIP)
-- USB gadget emulation via config templates
-- GitHub auto-update support
-- Systemd integration
-- Fully headless CLI Kali setup (no XFCE bloat)
+* **Modular payloads**: HID, network, reverse shells, etc.
+* **USB gadget** modes via **configfs** scripts (HID / RNDIS/ECM / Mass Storage)
+* **OLED menu** (Waveshare 1.3″ SH1106) — optional, can be installed/uninstalled from the device itself
+* **Web UI** (Flask) — optional, runs via systemd unit
+* **Systemd** integration; services live in `systemd/`
+* **Headless-friendly** CLI (`p4wnctl.py`) + a simple curses TUI (`p4wnctl.py menu`)
 
 ---
 
-## 📂 Project Structure
+## Hardware
 
-- `/payloads/` — modular attack scripts
-- `/hooks/` — OLED/menu logic, startup scripts
-- `/tools/` — injectors, Responder/DNS/etc
-- `/config/` — USB gadget templates
-- `/logs/` — runtime logs (e.g., Responder)
+* Raspberry Pi Zero or Zero 2 W
+* microSD (≥ 4 GB)
+* (Optional) Waveshare 1.3″ OLED HAT (SH1106 on I²C `0x3C`)
+* (Optional) USB-A gadget board/shim
 
 ---
 
-## 🧹 Setup: Headless Kali Linux on Pi Zero 2 W
+## Repository layout
 
-To remove XFCE GUI and prep a clean, fast Kali headless build:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/quasialex/p4wnp1-o2/main/scripts/setup_headless_kali.sh | bash
+```
+.
+├─ install.sh                     # modular installer (USB / OLED / WebUI)
+├─ p4wnctl.py                     # CLI (USB, payloads, web, services, IP, TUI)
+├─ systemd/                       # unit files (source of truth)
+│  ├─ p4wnp1.service              # core supervisor
+│  ├─ p4wnp1-usb-prep.service     # configfs pre-flight (optional)
+│  ├─ oledmenu.service            # OLED menu (optional)
+│  └─ p4wnp1-webui.service        # Web UI (optional)
+├─ oled/
+│  ├─ oled_menu.py                # OLED app (reads menu_config.json)
+│  └─ menu_config.json            # menu entries (actions/submenus)
+├─ webui/                         # Flask app (optional)
+│  ├─ app.py  sse.py  services/  templates/
+├─ hooks/
+│  ├─ select_gadget.sh            # switch USB mode via configfs
+│  └─ gadget_reset.sh             # clean up dangling gadget state
+├─ config/
+│  ├─ active_payload              # path/name of current payload
+│  ├─ reverse_shell.conf          # settings used by some payloads
+│  └─ usb_gadgets/
+│     ├─ hid_net_only.sh
+│     ├─ hid_storage_net.sh
+│     └─ storage_only.sh
+└─ payloads/
+   ├─ hid/   network/   listeners/   shell/
+   └─ (your .sh payloads)
 ```
 
-> ⚠️ Or run manually:
-> `sudo bash scripts/setup_headless_kali.sh`
-
-What it does:
-
-* Purges XFCE GUI and display manager
-* Installs core tools (git, tmux, python, bettercap, etc.)
-* Sets system to boot into CLI (multi-user.target)
-* Installs `pipx` and installs `impacket` cleanly
-* Installs `luma.oled` via `pip3 --break-system-packages` for OLED support
-
 ---
 
-## 🚀 Usage
+## Install (modular)
 
-## Quick install
+`install.sh` copies files into `/opt/p4wnp1`, installs dependencies, writes systemd units from `systemd/`, and (optionally) enables them.
+
 ```bash
-git clone https://github.com/quasialex/p4wnp1-o2.git /opt/p4wnp1
-cd p4wnp1
-sudo ./install.sh
-# First time only: reboot to ensure dwc2 loads
+git clone https://github.com/<you>/p4wnp1-o2-draft.git
+cd p4wnp1-o2-draft
+sudo ./install.sh [options]
+# Reboot on first install so the dwc2 overlay takes effect
 sudo reboot
-
-Run setup:
-
-```bash
-sudo bash /opt/p4wnp1/setup_payloads.sh
 ```
 
-Run a payload manually:
+### Options
+
+* `--with-usb yes|no` *(default: yes)*
+* `--with-oled auto|yes|no` *(default: auto; detects SH1106 at 0x3C)*
+* `--with-webui yes|no` *(default: yes)*
+* `--no-enable` *(copy units but don’t enable/start them)*
+* `--sudo-user <name>` *(write sudoers for OLED menu/CLI actions)*
+* `--webui-host <ip>` `--webui-port <n>` `--webui-token <str>` *(env override for Web UI)*
+
+### Examples
+
+**USB-only (no OLED, no Web UI):**
 
 ```bash
-sudo bash /opt/p4wnp1/payloads/network/rogue_dhcp_dns.sh
+sudo ./install.sh --with-usb yes --with-oled no --with-webui no
 ```
 
-To execute the currently selected payload (as defined in
-`config/active_payload`, which stores the payload **ID** from
-`config/payload.json`), simply run:
+**Auto-enable OLED if present; install Web UI but don’t start anything:**
 
 ```bash
-sudo /opt/p4wnp1/run.sh
+sudo ./install.sh --with-oled auto --with-webui yes --no-enable
 ```
 
-### 🔍 List available payloads
-
-Quickly view which payloads are available (and whether they are
-enabled) using the helper script:
+**Full stack:**
 
 ```bash
-python3 /opt/p4wnp1/tools/payload_manager.py list
+sudo ./install.sh --with-usb yes --with-oled yes --with-webui yes
+```
+
+> The installer also creates a 128 MB VFAT `usb_mass_storage.img` if missing.
+
+---
+
+## Managing services
+
+You can use **systemd** directly or the **CLI**.
+
+### systemd
+
+```bash
+# USB core
+sudo systemctl status p4wnp1.service
+sudo systemctl status p4wnp1-usb-prep.service
+
+# OLED
+sudo systemctl enable --now oledmenu.service
+sudo systemctl disable --now oledmenu.service
+sudo systemctl status oledmenu.service
+
+# Web UI
+sudo systemctl restart p4wnp1-webui.service
+sudo systemctl status p4wnp1-webui.service
+```
+
+### CLI (`p4wnctl.py`) — service manager
+
+```bash
+# status (no sudo needed)
+ /opt/p4wnp1/p4wnctl.py service status p4wnp1.service
+
+# install from repo → copy to /etc/systemd/system, enable + start
+sudo /opt/p4wnp1/p4wnctl.py service install oledmenu.service
+
+# control
+sudo /opt/p4wnp1/p4wnctl.py service restart p4wnp1.service
+sudo /opt/p4wnp1/p4wnctl.py service uninstall p4wnp1-webui.service
+
+# optional TUI (arrow keys)
+ /opt/p4wnp1/p4wnctl.py menu
 ```
 
 ---
 
-## 📡 OLED Menu (WIP)
+## OLED menu
 
-Joystick-controlled menu to select payload interactively:
+* App: `oled/oled_menu.py`
+* Config: `oled/menu_config.json`
+
+You can add entries that call either the CLI or `systemctl`. Example **Services** submenu:
+
+```json
+{
+  "title": "Services",
+  "submenu": [
+    { "title": "USB: Status",   "action": "python3 /opt/p4wnp1/p4wnctl.py service status p4wnp1.service" },
+    { "title": "USB: Restart",  "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service restart p4wnp1.service" },
+    { "title": "OLED: Install", "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service install oledmenu.service" },
+    { "title": "OLED: Uninstall", "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service uninstall oledmenu.service" },
+    { "title": "Web: Status",   "action": "python3 /opt/p4wnp1/p4wnctl.py service status p4wnp1-webui.service" }
+  ]
+}
+```
+
+**I²C note:** auto-detect expects I²C enabled. Ensure `dtparam=i2c_arm=on` is present in `/boot/config.txt` (or `/boot/firmware/config.txt` on Bookworm). If you run OLED unprivileged, add your user to the `i2c` group:
 
 ```bash
-sudo python3 /opt/p4wnp1/oled/oled_menu.py
+sudo usermod -aG i2c $USER
 ```
-(set `P4WN_HOME` if installed elsewhere)
 
-> Requires: `luma.oled`, joystick/button GPIO mapping, and Waveshare 1.3" OLED setup.
+---
 
-### 🌐 Web Interface
+## USB gadget modes
 
-A lightweight Flask-based web UI is included. It lists available payloads, allows enabling/disabling them and lets you trigger them remotely.
+Predefined configfs scripts (under `config/usb_gadgets/`):
 
-Start the server:
+* `hid_net_only.sh` — HID + RNDIS/ECM
+* `hid_storage_net.sh` — HID + NET + Mass Storage
+* `storage_only.sh` — Mass Storage only
+
+Set them via CLI:
 
 ```bash
-sudo python3 /opt/p4wnp1/webui/server.py
+# show current mode (reads configfs)
+ /opt/p4wnp1/p4wnctl.py usb status
+
+# set mode (requires sudo)
+sudo /opt/p4wnp1/p4wnctl.py usb set hid_net_only
+sudo /opt/p4wnp1/p4wnctl.py usb set hid_storage_net
+sudo /opt/p4wnp1/p4wnctl.py usb set storage_only
 ```
 
-Then browse to `http://<pi-ip>:8080`.
+---
+
+## Payloads
+
+* Place payload scripts in `payloads/` or subfolders (`hid/`, `network/`, `listeners/`, `shell/`).
+* The **active payload** pointer lives in `config/active_payload` (stores a path or a short name resolved by the CLI).
+
+```bash
+# list candidates
+ /opt/p4wnp1/p4wnctl.py payload list
+
+# set active payload
+sudo /opt/p4wnp1/p4wnctl.py payload set reverse_shell
+sudo /opt/p4wnp1/p4wnctl.py payload set payloads/hid/autorun_powershell.sh
+
+# check
+ /opt/p4wnp1/p4wnctl.py payload status
+```
+
+Some payloads read `config/reverse_shell.conf` for defaults.
 
 ---
 
-### 💻 USB Ethernet Access (`g_ether`) – macOS/Linux
+## Web UI (optional)
 
-This method allows full SSH access to your Pi Zero 2 W using only a single USB cable — no Wi-Fi or HDMI needed.
+Folder: `webui/` (`app.py`, `sse.py`, `services/`, `templates/`).
 
-#### 🧩 Prerequisites
+* The installer writes a systemd override containing `WEBUI_HOST`, `WEBUI_PORT` (and optional `WEBUI_TOKEN`).
+* Change them by re-running `install.sh` with `--webui-*` flags **or** by editing:
 
-* Raspberry Pi Zero or Zero 2 W (must support OTG)
-* A **data-capable micro-USB cable**
-* Raspberry Pi OS Bookworm or Kali Linux (headless CLI build)
+  ```
+  /etc/systemd/system/p4wnp1-webui.service.d/override.conf
+  ```
 
-#### 🔧 Setup Instructions
+  then:
 
-1. **Enable USB OTG overlay**
-   Edit `/boot/firmware/config.txt` and add:
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl restart p4wnp1-webui.service
+  ```
 
-   ```ini
-   dtoverlay=dwc2
-   ```
-
-2. **Enable USB Ethernet gadget**
-   Edit `/boot/firmware/cmdline.txt` (must be one line), and add after `rootwait`:
-
-   ```text
-   modules-load=dwc2,g_ether
-   ```
-
-3. **Assign static IP to the Pi's USB interface**
-   Create `/etc/network/interfaces.d/usb0`:
-
-   ```ini
-   auto usb0
-   iface usb0 inet static
-       address 192.168.7.2
-       netmask 255.255.255.0
-   ```
-
-4. **Reboot**, then connect the Pi to your Mac via the USB (data) port.
-
-5. **Configure macOS USB interface:**
-
-   * Go to **System Settings > Network**
-   * A new interface should appear (e.g., *RNDIS/Ethernet Gadget*)
-   * Set **Manual IP**:
-
-     * IP: `192.168.7.1`
-     * Subnet: `255.255.255.0`
-     * Router: *(leave blank)*
-
-6. **SSH into the Pi**
-
-   ```bash
-   ssh pi@192.168.7.2
-   ```
+> Note: the old `webui/server.py` flow is removed. The unit runs `webui/app.py`.
 
 ---
 
-#### ⚠️ USB Cable Warning
+## Sudoers (optional convenience)
 
-Many micro-USB cables are **charge-only** and do **not support data transfer**. If the Pi powers up but no new interface appears on macOS:
+If you pass `--sudo-user <name>`, the installer writes a minimal sudoers policy to let the menu/CLI perform privileged actions without repeated password prompts:
 
-* Try a cable known to support **file transfer** (e.g., with Android phones)
-* Recommended brands: **Anker**, **UGREEN**, **Raspberry Pi Official Cable**
-* Avoid cables labeled “Fast Charging Only”
-
----
-
-## 🛠 Requirements
-
-* Raspberry Pi Zero 2 W
-* Kali Linux ARM image (Zero/Zero2W build)
-* USB OTG capability — use the **“USB” port**, not the “PWR” port (supports gadget mode)
-* Waveshare 1.3" 128x64 OLED HAT (SH1106, i2c)
-* Optional: UPS Hat or custom enclosure for portable/stealth use
+```
+/opt/p4wnp1/hooks/select_gadget.sh
+/opt/p4wnp1/hooks/gadget_reset.sh
+/opt/p4wnp1/p4wnctl.py
+```
 
 ---
 
-## ✨ Credits
+## Troubleshooting
 
-* Based on **P4wnP1 A.L.O.A.** by Rogan Dawes
+* **No USB controller found**
+  `p4wnctl.py usb status` prints “No USB Device Controller”.
+  → Ensure `dtoverlay=dwc2` is present in `/boot/config.txt` (or `/boot/firmware/config.txt`) and **reboot**.
+  Modules should load: `dwc2`, `libcomposite`, `configfs`.
+
+* **OLED not detected (auto mode)**
+
+  ```bash
+  sudo apt install -y i2c-tools
+  i2cdetect -y 1
+  ```
+
+  Expect to see `0x3C`. Otherwise, use `--with-oled yes` or run OLED without auto-detect.
+
+* **Service won’t start**
+
+  ```bash
+  sudo systemctl status <unit> --no-pager
+  journalctl -u <unit> -n 100 --no-pager
+  ```
+
+* **Mass Storage image missing**
+  The installer creates `usb_mass_storage.img` (128 MB VFAT) if absent. Replace it with your own if desired.
+
+---
+
+## Uninstall (units only)
+
+```bash
+sudo systemctl disable --now p4wnp1.service p4wnp1-usb-prep.service p4wnp1-webui.service oledmenu.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/{p4wnp1.service,p4wnp1-usb-prep.service,p4wnp1-webui.service,oledmenu.service}
+sudo systemctl daemon-reload
+```
+
+> To remove files entirely, delete `/opt/p4wnp1` after stopping services.
+
+---
+
+## Credits
+
+* Based on **P4wnP1 A.L.O.A.** (Rogan Dawes)
 * Raspberry Pi Foundation
-* Adafruit CircuitPython + Luma.OLED
-* Bettercap, Impacket, Responder, and the wider infosec community
+* Luma.OLED, Bettercap, Impacket, Responder, and the wider infosec community
 
 ---
 
-## 📬 Contact
+## Sanity checklist (pre-release)
 
-Feel free to open an issue or PR if you’d like to contribute.
+* [ ] `systemd/` contains the four units; `install.sh` installs from **systemd/** first.
+* [ ] `install.sh` flags work (`--with-usb|oled|webui`, `--no-enable`, `--sudo-user`).
+* [ ] `p4wnctl.py` can run `usb status`, `payload list`, `ip`, and `service status <unit>`.
+* [ ] OLED menu entries point to `p4wnctl.py service …` **or** `systemctl …` and succeed.
+* [ ] `hooks/select_gadget.sh` + `hooks/gadget_reset.sh` are executable.
+* [ ] `config/usb_gadgets/*.sh` are executable.
+* [ ] (Optional) Web UI reachable at your `WEBUI_HOST:WEBUI_PORT`.
