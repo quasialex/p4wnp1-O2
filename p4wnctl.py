@@ -18,6 +18,14 @@ WEBUI_UNIT = "p4wnp1-webui.service"
 WEBUI_OVERRIDE_DIR = Path(f"/etc/systemd/system/{WEBUI_UNIT}.d")
 WEBUI_OVERRIDE_FILE = WEBUI_OVERRIDE_DIR / "override.conf"
 
+# Known units for convenience (show in TUI Services submenu)
+SERVICE_UNITS = [
+    ("USB Core", "p4wnp1.service"),
+    ("USB Prep", "p4wnp1-usb-prep.service"),
+    ("OLED Menu", "oledmenu.service"),
+    ("Web UI", "p4wnp1-webui.service"),
+]
+
 # ======= Small helpers =======
 def sh(cmd: str, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, check=check)
@@ -30,6 +38,54 @@ def need_root():
 def systemctl(*args) -> subprocess.CompletedProcess:
     return sh("systemctl " + " ".join(args), check=False)
 
+def last_line(txt: str) -> str:
+    for ln in reversed((txt or "").splitlines()):
+        ln = ln.strip()
+        if ln:
+            return ln
+    return ""
+
+# ======= Service management =======
+def svc_paths(unit: str) -> tuple[Path, Path]:
+    """Return (src, dst) for a unit file, searching /opt/p4wnp1/systemd/<unit> then /opt/p4wnp1/<unit>."""
+    src1 = P4WN_HOME / "systemd" / unit
+    src2 = P4WN_HOME / unit
+    dst  = Path("/etc/systemd/system") / unit
+    return (src1 if src1.exists() else src2, dst)
+
+def svc_install(unit: str) -> int:
+    need_root()
+    src, dst = svc_paths(unit)
+    if not src.exists():
+        print(f"Unit not found in repo: {src}", file=sys.stderr)
+        return 10
+    try:
+        dst.write_bytes(src.read_bytes())
+        os.chmod(dst, 0o644)
+        systemctl("daemon-reload")
+        systemctl("enable", "--now", unit)
+        systemctl("status", "--no-pager", "--lines=5", unit)
+        return 0
+    except Exception as e:
+        print(f"Install failed: {e}", file=sys.stderr); return 11
+
+def svc_uninstall(unit: str) -> int:
+    need_root()
+    systemctl("disable", "--now", unit)
+    _p = Path("/etc/systemd/system") / unit
+    if _p.exists():
+        try: _p.unlink()
+        except Exception: pass
+    systemctl("daemon-reload")
+    print(f"{unit} uninstalled.")
+    return 0
+
+def svc_status_text(unit: str) -> str:
+    active = systemctl("is-active", unit).stdout.strip() or "unknown"
+    enabled = systemctl("is-enabled", unit).stdout.strip() or "unknown"
+    return f"{unit}: {active} ({enabled})"
+
+# ======= USB =======
 def usb_preflight():
     sh("modprobe configfs || true", check=False)
     sh("mount -t configfs none /sys/kernel/config || true", check=False)
@@ -42,14 +98,6 @@ def usb_preflight():
               file=sys.stderr)
         sys.exit(3)
 
-def last_line(txt: str) -> str:
-    for ln in reversed((txt or "").splitlines()):
-        ln = ln.strip()
-        if ln:
-            return ln
-    return ""
-
-# ======= USB =======
 def usb_status_text() -> str:
     if not USB_GADGET.exists():
         return "USB: none"
@@ -175,7 +223,6 @@ def payload_set(name: str) -> int:
     return 0
 
 def get_payload_choices():
-    # Build selector choices dynamically
     names = []
     roots = [
         P4WN_HOME / "payloads",
@@ -254,21 +301,18 @@ WEB_BIND_CHOICES = [
 def ip_text() -> str:
     """
     List IPv4 for all relevant NICs with smart ordering:
-      1) USB-backed (sysfs path contains '/usb/') e.g., usb0, rndis0, ecm0, enx...
-      2) Wired (eth*, en*)
+      1) USB-backed (sysfs path contains '/usb/')
+      2) Wired (eth*/en*)
       3) Wi-Fi (wlan*)
-      4) Others (if any)
-    Show operstate and 'no ip' when applicable.
+      4) Others
     """
     base = Path("/sys/class/net")
     ifaces = [p.name for p in base.iterdir() if p.is_dir() and p.name != "lo"]
 
     def is_usb(iface: str) -> bool:
-        # A USB NIC will have a device symlink path containing '/usb/'
         dev = base / iface / "device"
         try:
-            target = os.readlink(dev)  # relative symlink
-            # resolve to absolute for certainty
+            target = os.readlink(dev)
             full = (dev.parent / target).resolve()
             return "/usb" in str(full)
         except OSError:
@@ -280,7 +324,6 @@ def ip_text() -> str:
         except Exception:
             return "unknown"
 
-    # rank: USB first, then eth/en, then wlan, then others
     def rank(iface: str) -> tuple:
         name = iface.lower()
         if is_usb(iface):               pri = 0
@@ -297,26 +340,21 @@ def ip_text() -> str:
         cp = sh(f"ip -4 addr show {iface}", check=False)
         ipline = ""
         if "inet " in cp.stdout:
-            # take first IPv4
             for ln in cp.stdout.splitlines():
                 ln = ln.strip()
                 if ln.startswith("inet "):
-                    # looks like: "inet 10.13.37.1/24 brd ... scope global ..."
                     parts = ln.split()
                     if len(parts) > 1:
                         ipline = parts[1]  # CIDR
                         break
-        if ipline:
-            lines.append(f"{iface} ({state}): {ipline}")
-        else:
-            lines.append(f"{iface} ({state}): no ip")
+        lines.append(f"{iface} ({state}): {ipline if ipline else 'no ip'}")
     return "\n".join(lines) if lines else "No interfaces"
 
 def ip_show(_args=None) -> int:
     print(ip_text())
     return 0
 
-# ======= Minimal help screens =======
+# ======= Help screens =======
 MAIN_HELP = dedent("""\
 P4wnP1-O2 control CLI
 
@@ -324,6 +362,7 @@ Subcommands:
   usb         USB gadget controls
   payload     Payload controls
   web         Web UI controls (port/host, start/stop, enable/disable)
+  service     Manage systemd units (install/uninstall/start/stop/...)
   ip          Show IP addresses
   menu        Interactive menu (arrow keys)
 """)
@@ -334,11 +373,6 @@ USB gadget controls
 Commands:
   usb status
   usb set {hid_net_only|hid_storage_net|storage_only}
-
-Examples:
-  p4wnctl usb status
-  sudo p4wnctl usb set hid_net_only
-  sudo p4wnctl usb set hid_storage_net
 """)
 
 PAYLOAD_HELP = dedent("""\
@@ -348,11 +382,6 @@ Commands:
   payload status
   payload list
   payload set <name>
-
-Examples:
-  p4wnctl payload status
-  p4wnctl payload list
-  sudo p4wnctl payload set reverse_shell
 """)
 
 WEB_HELP = dedent(f"""\
@@ -369,11 +398,17 @@ Notes:
   • Config writes systemd override at:
     {WEBUI_OVERRIDE_FILE}
   • Flask app should read WEBUI_HOST / WEBUI_PORT env vars.
+""")
+
+SERVICE_HELP = dedent("""\
+Service controls
+----------------
+Usage:
+  p4wnctl service <install|uninstall|start|stop|restart|enable|disable|status|logs> <unit>
 
 Examples:
-  p4wnctl web status
-  sudo p4wnctl web config set --host 127.0.0.1 --port 8080
-  sudo p4wnctl web restart
+  sudo p4wnctl service install oledmenu.service
+  sudo p4wnctl service restart p4wnp1.service
 """)
 
 # ======= Curses TUI (arrow-driven) =======
@@ -382,14 +417,14 @@ class MenuItem:
         self.label = label
         self.kind = kind  # 'submenu' | 'action' | 'selector' | 'status'
         self.data = data or {}
-        self.status_fn = status_fn  # callable -> str (one-liner or small block)
+        self.status_fn = status_fn  # callable -> str
 
 class MenuState:
     def __init__(self, title, items):
         self.title = title
         self.items = items
         self.idx = 0
-        self.sel_idx = {}  # selector cursor per item
+        self.sel_idx = {}
 
     def current(self):
         if not self.items: return None
@@ -405,7 +440,6 @@ def draw_menu(stdscr, state: MenuState, toast: str = ""):
     add(0, 0, state.title, curses.A_BOLD)
     add(1, 0, "↑↓ move   ← back   →/Enter select", curses.A_DIM)
 
-    # status block (from current item) — show multiple lines
     status_lines = []
     cur = state.current()
     if cur and cur.status_fn:
@@ -415,8 +449,7 @@ def draw_menu(stdscr, state: MenuState, toast: str = ""):
         except Exception:
             status_lines = []
 
-    # print up to 3 status lines under the header
-    max_status = min(3, max(0, h - 8))  # avoid overflow in tiny terminals
+    max_status = min(3, max(0, h - 8))
     used = 0
     for i, ln in enumerate(status_lines[:max_status]):
         add(2 + i, 0, ln)
@@ -425,12 +458,9 @@ def draw_menu(stdscr, state: MenuState, toast: str = ""):
     top = 4 + used
 
     for i, it in enumerate(state.items):
-        prefix = "  "
-        if i == state.idx:
-            prefix = "> "
+        prefix = "> " if i == state.idx else "  "
         label = it.label
         if it.kind == "selector":
-            # show current choice
             curpos = state.sel_idx.get(id(it), 0)
             choices = it.data.get("choices", [])
             if choices:
@@ -438,7 +468,6 @@ def draw_menu(stdscr, state: MenuState, toast: str = ""):
                 label = f"{label}: {lab}"
         add(top + i, 0, prefix + label, curses.A_REVERSE if i == state.idx else 0)
 
-    # toast area
     if toast:
         add(h-2, 0, toast[:w-1], curses.A_BOLD)
     stdscr.refresh()
@@ -448,7 +477,6 @@ def tui_menu(stdscr):
     stdscr.nodelay(False)
     stdscr.keypad(True)
 
-    # Build menu tree
     usb_sub = MenuState("USB", [
         MenuItem("Current", "status", status_fn=usb_status_text),
         MenuItem("Select Mode", "selector", data={"choices": USB_CHOICES}),
@@ -458,12 +486,10 @@ def tui_menu(stdscr):
     ])
 
     def payload_set_cur(name): return lambda: payload_set(name)
-
     payload_choices = get_payload_choices()
     payload_sub = MenuState("Payloads", [
         MenuItem("Current", "status", status_fn=payload_status_text),
         MenuItem("Select Payload", "selector", data={"choices": payload_choices}),
-        # convenience applies:
         *[MenuItem(f"Apply: {lab}", "action", data={"fn": payload_set_cur(val)}) for lab, val in payload_choices[:6]],
     ])
 
@@ -478,10 +504,26 @@ def tui_menu(stdscr):
         MenuItem("Show override", "action", data={"fn": lambda: web_config_show(None)}),
     ])
 
+    # Services submenu (install/uninstall/start/stop/etc for known units)
+    def mk_svc_actions(title, unit):
+        return MenuState(title, [
+            MenuItem("Status",  "status", status_fn=lambda u=unit: svc_status_text(u)),
+            MenuItem("Start",   "action", data={"fn": lambda u=unit: (need_root(), systemctl('start', u).returncode)[1]}),
+            MenuItem("Stop",    "action", data={"fn": lambda u=unit: (need_root(), systemctl('stop', u).returncode)[1]}),
+            MenuItem("Restart", "action", data={"fn": lambda u=unit: (need_root(), systemctl('restart', u).returncode)[1]}),
+            MenuItem("Enable",  "action", data={"fn": lambda u=unit: (need_root(), systemctl('enable', u).returncode)[1]}),
+            MenuItem("Disable", "action", data={"fn": lambda u=unit: (need_root(), systemctl('disable', u).returncode)[1]}),
+            MenuItem("Install (copy+enable)",    "action", data={"fn": lambda u=unit: svc_install(u)}),
+            MenuItem("Uninstall (disable+rm)",   "action", data={"fn": lambda u=unit: svc_uninstall(u)}),
+        ])
+    svc_items = [MenuItem(nice, "submenu", data={"submenu": mk_svc_actions(nice, unit)}) for nice, unit in SERVICE_UNITS]
+    services_sub = MenuState("Services", svc_items if svc_items else [MenuItem("(no units)", "status")])
+
     root = MenuState("P4wnP1-O2", [
         MenuItem("USB", "submenu", data={"submenu": usb_sub}),
         MenuItem("Payloads", "submenu", data={"submenu": payload_sub}),
         MenuItem("Web UI", "submenu", data={"submenu": web_sub}),
+        MenuItem("Services", "submenu", data={"submenu": services_sub}),
         MenuItem("IP", "status", status_fn=ip_text),
         MenuItem("Quit", "action", data={"fn": lambda: "QUIT"}),
     ])
@@ -499,7 +541,6 @@ def tui_menu(stdscr):
         elif k in (curses.KEY_DOWN, ord('j')):
             st = stack[-1]; st.idx = (st.idx + 1) % len(st.items)
         elif k in (curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, ord('h')):
-            # back OR selector-left
             st = stack[-1]
             cur = st.current()
             if cur and cur.kind == "selector":
@@ -517,11 +558,9 @@ def tui_menu(stdscr):
             if cur.kind == "submenu":
                 stack.append(cur.data["submenu"])
             elif cur.kind == "status":
-                # show the status block quickly as toast
                 try: toast = last_line(cur.status_fn())
                 except Exception: toast = ""
             elif cur.kind == "selector":
-                # apply current choice
                 pos = st.sel_idx.get(id(cur), 0)
                 choices = cur.data.get("choices", [])
                 if not choices: continue
@@ -540,15 +579,13 @@ def tui_menu(stdscr):
                 fn = cur.data.get("fn")
                 if not fn: continue
                 r = fn()
-                if r == "QUIT":
-                    return
-                toast = "✓ OK" if (isinstance(r, int) and r == 0) or r is None else ("✓" if r else "✓")
+                if r == "QUIT": return
+                toast = "✓ OK" if (isinstance(r, int) and r == 0) or r is None else "✓"
         elif k in (ord('q'),):
             return
 
 # ======= CLI parsing / behavior =======
 def main() -> int:
-    # No args: minimal help
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
         print(MAIN_HELP.rstrip()); return 0
 
@@ -596,7 +633,6 @@ def main() -> int:
             action = sys.argv[3].lower()
             if action == "show": return web_config_show()
             if action == "set":
-                # parse --host / --port
                 host = None; port = None
                 args = sys.argv[4:]; i = 0
                 while i < len(args):
@@ -611,6 +647,26 @@ def main() -> int:
                     print(WEB_HELP.rstrip()); return 1
                 return web_config_set(host, port)
         print(WEB_HELP.rstrip()); return 1
+
+    # service (generic)
+    if cmd == "service":
+        if len(sys.argv) < 4:
+            print(SERVICE_HELP.rstrip()); return 1
+        action = sys.argv[2].lower()
+        unit = sys.argv[3]
+        if action == "install":   return svc_install(unit)
+        if action == "uninstall": return svc_uninstall(unit)
+        if action == "status":
+            print(svc_status_text(unit)); return 0
+        if action == "logs":
+            # show short status, then tail logs
+            rc1 = systemctl("status", "--no-pager", unit).returncode
+            rc2 = sh(f"journalctl -u {unit} --no-pager -n 100", check=False).returncode
+            return rc1 or rc2
+        if action in ("start","stop","restart","enable","disable"):
+            need_root()
+            return systemctl(action, unit).returncode
+        print(SERVICE_HELP.rstrip()); return 1
 
     # ip
     if cmd == "ip":

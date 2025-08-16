@@ -137,7 +137,18 @@
   },
 
   { "name": "Mass Storage Injector", "script": "{P4WN_HOME}/payloads/mass_storage.sh" },
-
+  {
+  "title": "Services",
+  "submenu": [
+    { "title": "USB: Status",   "action": "python3 /opt/p4wnp1/p4wnctl.py service status p4wnp1.service" },
+    { "title": "USB: Restart",  "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service restart p4wnp1.service" },
+    { "title": "OLED: Install", "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service install oledmenu.service" },
+    { "title": "OLED: Uninstall","action": "sudo python3 /opt/p4wnp1/p4wnctl.py service uninstall oledmenu.service" },
+    { "title": "OLED: Restart", "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service restart oledmenu.service" },
+    { "title": "Web: Status",   "action": "python3 /opt/p4wnp1/p4wnctl.py service status p4wnp1-webui.service" },
+    { "title": "Web: Restart",  "action": "sudo python3 /opt/p4wnp1/p4wnctl.py service restart p4wnp1-webui.service" }
+  ]
+  },
   {
     "name": "System",
     "submenu": [

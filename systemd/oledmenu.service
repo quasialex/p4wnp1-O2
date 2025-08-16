@@ -1,0 +1,16 @@
+[Unit]
+Description=OLED Menu Launcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /opt/p4wnp1/oled/oled_menu.py
+WorkingDirectory=/opt/p4wnp1/oled
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

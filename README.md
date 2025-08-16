@@ -93,7 +93,7 @@ python3 /opt/p4wnp1/tools/payload_manager.py list
 Joystick-controlled menu to select payload interactively:
 
 ```bash
-sudo python3 /opt/p4wnp1/hooks/oled_menu.py
+sudo python3 /opt/p4wnp1/oled/oled_menu.py
 ```
 (set `P4WN_HOME` if installed elsewhere)
 

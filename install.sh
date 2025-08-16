@@ -2,18 +2,19 @@
 set -euo pipefail
 
 # ===================================
-# P4wnP1-O2 Install Script (clean)
+# P4wnP1-O2 Install Script (modular)
 # ===================================
 
 # --- Paths ---
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="/opt/p4wnp1"
 
-# Systemd units expected to be present in the repo:
-#   p4wnp1.service
-#   oledmenu.service
-#   p4wnp1-webui.service
-WEBUI_UNIT="p4wnp1-webui.service"
+# Systemd unit names (installed if present in repo)
+P4WNP1_UNIT="p4wnp1.service"
+USB_PREP_UNIT="p4wnp1-usb-prep.service"     # optional
+OLED_UNIT="oledmenu.service"                # optional
+WEBUI_UNIT="p4wnp1-webui.service"           # optional
+
 WEBUI_OVERRIDE_DIR="/etc/systemd/system/${WEBUI_UNIT}.d"
 WEBUI_OVERRIDE_FILE="${WEBUI_OVERRIDE_DIR}/override.conf"
 
@@ -21,11 +22,24 @@ WEBUI_OVERRIDE_FILE="${WEBUI_OVERRIDE_DIR}/override.conf"
 need_root() { if [[ $EUID -ne 0 ]]; then echo "[!] Run as root: sudo ./install.sh [options]"; exit 1; fi; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# OLED auto-detect helper (Waveshare 1.3 SH1106 @ 0x3C on I2C-1)
+has_oled() {
+  if ! have i2cdetect; then
+    apt-get update -y && apt-get install -y i2c-tools || true
+  fi
+  i2cdetect -y 1 2>/dev/null | grep -qi ' 3c'
+}
+
 # --- Defaults (CLI flags override) ---
 WEBUI_HOST="0.0.0.0"
 WEBUI_PORT="8080"
 WEBUI_TOKEN=""         # optional; empty = no auth gate
 TARGET_USER=""
+
+WITH_USB="yes"         # yes|no
+WITH_OLED="auto"       # auto|yes|no
+WITH_WEBUI="yes"       # yes|no
+ENABLE_SERVICES="yes"  # yes|no (copy units but don't enable/start when 'no')
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
@@ -34,9 +48,36 @@ while [[ $# -gt 0 ]]; do
     --webui-host)  shift; WEBUI_HOST="${1:-}";;
     --webui-port)  shift; WEBUI_PORT="${1:-}";;
     --webui-token) shift; WEBUI_TOKEN="${1:-}";;
+
+    --with-usb)    shift; WITH_USB="${1:-yes}";;
+    --with-oled)   shift; WITH_OLED="${1:-auto}";;
+    --with-webui)  shift; WITH_WEBUI="${1:-yes}";;
+
+    --no-enable)   ENABLE_SERVICES="no";;
+    -h|--help)
+      cat <<EOF
+Usage: sudo ./install.sh [options]
+
+User / WebUI:
+  --sudo-user <name>              Add sudoers rules for this user (p4wnctl + hooks)
+  --webui-host <ip>               Web UI bind (default: 0.0.0.0)
+  --webui-port <n>                Web UI port (default: 8080)
+  --webui-token <string>          Optional header token (X-P4WN-Token)
+
+Modular services:
+  --with-usb yes|no               Install/enable USB core units (default: yes)
+  --with-oled auto|yes|no         Install/enable OLED (default: auto)
+  --with-webui yes|no             Install/enable Web UI (default: yes)
+  --no-enable                     Copy unit files but don't enable/start any
+
+Examples:
+  USB only (no OLED/web):      --with-usb yes --with-oled no --with-webui no
+  Auto OLED if present:        --with-oled auto
+  Copy units only (no start):  --no-enable
+EOF
+      exit 0;;
     *)
       echo "[!] Unknown option: $1"
-      echo "Usage: sudo ./install.sh [--sudo-user <name>] [--webui-host 0.0.0.0] [--webui-port 8080] [--webui-token <string>]"
       exit 1;;
   esac
   shift
@@ -58,7 +99,12 @@ PIP_FLAGS=""
 if pip3 install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
   PIP_FLAGS="--break-system-packages"
 fi
-pip3 install $PIP_FLAGS flask netifaces luma.oled
+# Always needed:
+pip3 install $PIP_FLAGS netifaces luma.oled
+# Flask only if WebUI requested:
+if [[ "$WITH_WEBUI" == "yes" ]]; then
+  pip3 install $PIP_FLAGS flask
+fi
 
 # --- Enable dwc2 overlay for USB gadget ---
 BOOTCFG="/boot/config.txt"
@@ -70,16 +116,70 @@ else
   echo "[*] dwc2 already enabled"
 fi
 
-# --- Install systemd units from repo (NO auto-generation here) ---
+# --- Install systemd units from repo (copy if present) ---
 echo "[*] Installing systemd units from repo ..."
-install -m 0644 "$INSTALL_DIR/p4wnp1.service" /etc/systemd/system/
-install -m 0644 "$INSTALL_DIR/oledmenu.service" /etc/systemd/system/ || true
-install -m 0644 "$INSTALL_DIR/p4wnp1-webui.service" /etc/systemd/system/
+inst_unit() {
+  local name="$1"
+  local src=""
+  if   [[ -f "$INSTALL_DIR/systemd/$name" ]]; then src="$INSTALL_DIR/systemd/$name"
+  elif [[ -f "$INSTALL_DIR/$name" ]]; then       src="$INSTALL_DIR/$name"
+  else
+    return 0
+  fi
+  install -m 0644 "$src" "/etc/systemd/system/$name"
+  echo "  - installed $name (from $(realpath "$src" 2>/dev/null || echo "$src"))"
+}
+inst_unit "$P4WNP1_UNIT"
+inst_unit "$USB_PREP_UNIT"
+inst_unit "$OLED_UNIT"
+inst_unit "$WEBUI_UNIT"
 
 systemctl daemon-reload
-systemctl enable p4wnp1.service || true
-systemctl enable oledmenu.service 2>/dev/null || true
-systemctl enable "$WEBUI_UNIT"
+
+# --- Enable/Start selected services ---
+start_unit() {
+  local u="$1"
+  systemctl enable "$u" 2>/dev/null || true
+  systemctl restart "$u" 2>/dev/null || true
+}
+
+# USB core (p4wnp1 + optional usb-prep)
+if [[ "$WITH_USB" == "yes" ]]; then
+  if [[ "$ENABLE_SERVICES" == "yes" ]]; then
+    [[ -f "/etc/systemd/system/$P4WNP1_UNIT" ]] && start_unit "$P4WNP1_UNIT"
+    [[ -f "/etc/systemd/system/$USB_PREP_UNIT" ]] && start_unit "$USB_PREP_UNIT"
+  fi
+  echo "[*] USB services: $( [[ "$ENABLE_SERVICES" == "yes" ]] && echo 'enabled' || echo 'installed (disabled)')"
+else
+  echo "[*] USB services: disabled by flag"
+fi
+
+# OLED menu (auto/yes/no)
+WANT_OLED="no"
+case "$WITH_OLED" in
+  yes)  WANT_OLED="yes" ;;
+  auto) has_oled && WANT_OLED="yes" || WANT_OLED="no" ;;
+  no)   WANT_OLED="no" ;;
+esac
+
+if [[ "$WANT_OLED" == "yes" ]]; then
+  if [[ -f "/etc/systemd/system/$OLED_UNIT" && "$ENABLE_SERVICES" == "yes" ]]; then
+    start_unit "$OLED_UNIT"
+  fi
+  echo "[*] OLED: enabled (${WITH_OLED})"
+else
+  echo "[*] OLED: not enabled (${WITH_OLED})"
+fi
+
+# Web UI (yes/no)
+if [[ "$WITH_WEBUI" == "yes" ]]; then
+  if [[ -f "/etc/systemd/system/$WEBUI_UNIT" && "$ENABLE_SERVICES" == "yes" ]]; then
+    start_unit "$WEBUI_UNIT"
+  fi
+  echo "[*] WebUI: enabled"
+else
+  echo "[*] WebUI: not enabled"
+fi
 
 # --- Ensure executables ---
 chmod +x "$INSTALL_DIR"/config/usb_gadgets/*.sh 2>/dev/null || true
@@ -122,19 +222,22 @@ if [[ -z "$TARGET_USER" && -t 0 ]]; then read -r -p "[?] Add sudoers rule for wh
 if [[ -n "$TARGET_USER" ]]; then add_sudoers "$TARGET_USER"; else echo "[*] Skipping sudoers setup."; fi
 
 # --- Web UI bind + auth token (systemd override ONLY; units are not modified) ---
-echo "[*] Configuring Web UI bind and token ..."
-mkdir -p "$WEBUI_OVERRIDE_DIR"
-{
-  echo "[Service]"
-  echo "Environment=\"WEBUI_HOST=${WEBUI_HOST}\" \"WEBUI_PORT=${WEBUI_PORT}\""
-  # Optional header token (checked by app.py if implemented)
-  if [[ -n "$WEBUI_TOKEN" ]]; then
-    echo "Environment=\"WEBUI_TOKEN=${WEBUI_TOKEN}\""
-  fi
-} > "$WEBUI_OVERRIDE_FILE"
+if [[ "$WITH_WEBUI" == "yes" ]]; then
+  echo "[*] Configuring Web UI bind and token ..."
+  mkdir -p "$WEBUI_OVERRIDE_DIR"
+  {
+    echo "[Service]"
+    echo "Environment=\"WEBUI_HOST=${WEBUI_HOST}\" \"WEBUI_PORT=${WEBUI_PORT}\""
+    if [[ -n "$WEBUI_TOKEN" ]]; then
+      echo "Environment=\"WEBUI_TOKEN=${WEBUI_TOKEN}\""
+    fi
+  } > "$WEBUI_OVERRIDE_FILE"
 
-systemctl daemon-reload
-systemctl restart "$WEBUI_UNIT" || true
+  if [[ "$ENABLE_SERVICES" == "yes" ]]; then
+    systemctl daemon-reload
+    systemctl restart "$WEBUI_UNIT" || true
+  fi
+fi
 
 # --- Clean up legacy files if present (safe no-ops) ---
 for f in \
@@ -145,7 +248,7 @@ for f in \
   logs/.keep \
   www
 do
-  if [ -e "$INSTALL_DIR/$f" ]; then
+  if [[ -e "$INSTALL_DIR/$f" ]]; then
     echo "[*] Removing legacy $f"
     rm -rf "$INSTALL_DIR/$f"
   fi
@@ -153,7 +256,11 @@ done
 
 echo
 echo "[✓] Install complete."
-echo "    Web UI: ${WEBUI_HOST}:${WEBUI_PORT}  (service: ${WEBUI_UNIT})"
+if [[ "$WITH_WEBUI" == "yes" ]]; then
+  echo "    Web UI: ${WEBUI_HOST}:${WEBUI_PORT}  (service: ${WEBUI_UNIT})"
+else
+  echo "    Web UI: disabled"
+fi
 if [[ -n "$WEBUI_TOKEN" ]]; then
   echo "    Web UI token set. Clients must send header:  X-P4WN-Token: ${WEBUI_TOKEN}"
 else
