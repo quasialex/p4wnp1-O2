@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Web UI</h1>
+<p><strong>Status:</strong> <span id="web-status">{{ web }}</span></p>
+
+<div>
+  <button hx-post="/web/ctl" hx-vals='{"cmd":"start"}'   hx-target="#web-status" hx-swap="outerHTML">Start</button>
+  <button hx-post="/web/ctl" hx-vals='{"cmd":"stop"}'    hx-target="#web-status" hx-swap="outerHTML">Stop</button>
+  <button hx-post="/web/ctl" hx-vals='{"cmd":"restart"}' hx-target="#web-status" hx-swap="outerHTML">Restart</button>
+  <button hx-post="/web/ctl" hx-vals='{"cmd":"enable"}'  hx-target="#web-status" hx-swap="outerHTML">Enable</button>
+  <button hx-post="/web/ctl" hx-vals='{"cmd":"disable"}' hx-target="#web-status" hx-swap="outerHTML">Disable</button>
+</div>
+
+<h3>Bind</h3>
+<form hx-post="/web/bind" hx-target="#web-status" hx-swap="outerHTML">
+  <input name="host" value="127.0.0.1" size="12">
+  <input name="port" value="8080" size="6">
+  <button type="submit">Apply</button>
+</form>
+{% endblock %}

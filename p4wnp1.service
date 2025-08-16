@@ -1,15 +1,15 @@
 [Unit]
-Description=Custom P4wnP1 Framework
-After=network-online.target
+Description=P4wnP1-O2 base service (no auto-payload)
+After=network-online.target p4wnp1-usb-prep.service
 Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=P4WN_HOME=/opt/p4wnp1
+# Minimal: keep process alive, log a banner
+ExecStart=/usr/bin/env bash -c 'echo "[P4wnP1] Ready"; sleep infinity'
 WorkingDirectory=/opt/p4wnp1
-ExecStart=/opt/p4wnp1/run.sh
 Restart=always
-StandardOutput=journal
-StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

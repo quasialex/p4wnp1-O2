@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Network</h1>
+<ul>
+  {% for line in ips %}
+    <li>{{ line }}</li>
+  {% endfor %}
+</ul>
+{% endblock %}

@@ -1,11 +1,12 @@
 [Unit]
-Description=P4wnP1 Web UI
-After=network-online.target
-Wants=network-online.target
+Description=P4wnP1-O2 Web UI
+After=network.target
 
 [Service]
+Type=simple
+Environment=P4WN_HOME=/opt/p4wnp1
 WorkingDirectory=/opt/p4wnp1/webui
-ExecStart=/usr/bin/env python3 /opt/p4wnp1/webui/server.py
+ExecStart=/usr/bin/env python3 /opt/p4wnp1/webui/app.py
 Restart=always
 
 [Install]

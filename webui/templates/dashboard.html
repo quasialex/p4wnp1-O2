@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+<div id="live">
+  <div><strong>USB:</strong> <span class="usb">{{ usb }}</span></div>
+  <div><strong>Payload:</strong> <span class="payload">{{ payload }}</span></div>
+  <div><strong>Web:</strong> <span class="web">{{ web }}</span></div>
+  <div><strong>IP:</strong> <span class="ips">{{ " | ".join(ips) }}</span></div>
+</div>
+{% endblock %}

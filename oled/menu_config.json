@@ -2,81 +2,148 @@
   {
     "name": "Status",
     "submenu": [
-      {"name": "Show USB Mode", "script": "{P4WN_HOME}/hooks/status_usb_mode.sh"},
-      {"name": "Show Active Payload", "script": "{P4WN_HOME}/hooks/status_payload.sh"},
-      {"name": "← Back" }
+      { "name": "USB:",      "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
+      { "name": "Payload:",  "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
+      { "name": "Web UI:",   "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
+      { "name": "IP:",       "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" },
+      { "name": "← Back" }
     ]
   },
-  {
-    "name": "HID Attacks",
-    "submenu": [
-      {"name": "PowerShell Reverse Shell", "script": "{P4WN_HOME}/payloads/hid/reverse_shell.sh"},
-      {"name": "USB Stealer", "script": "{P4WN_HOME}/payloads/hid/usb_stealer.sh"},
-      {"name": "Domain Enumerator", "script": "{P4WN_HOME}/payloads/hid/domain_enum_hid.sh"},
-      {"name": "Lockpicker", "script": "{P4WN_HOME}/payloads/hid/lockpicker.sh"},
-      {"name": "Test Typing", "script": "{P4WN_HOME}/payloads/hid/test_typing.sh"},
-      {"name": "← Back" }
-    ]
-  },
-  {
-    "name": "Network Attacks",
-    "submenu": [
-      {"name": "Rogue DHCP + DNS", "script": "{P4WN_HOME}/payloads/network/rogue_dhcp_dns.sh"},
-      {"name": "DNS Spoof & Redirect", "script": "{P4WN_HOME}/payloads/network/dns_spoof_redirect.sh"},
-      {"name": "Responder Attack", "script": "{P4WN_HOME}/payloads/network/responder_attack.sh"},
-      {"name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.sh"},
-      {"name": "← Back" }
-    ]
-  },
-  {
-    "name": "Listeners",
-    "submenu": [
-      {"name": "Reverse Shell Listener", "script": "{P4WN_HOME}/payloads/listeners/revshell_listener.sh"},
-      {"name": "HID Backdoor Listener", "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.sh"},
-      {"name": "← Back" }
-    ]
-  },
+
   {
     "name": "USB Mode",
     "submenu": [
-      {"name": "Current: (read)", "script": "{P4WN_HOME}/hooks/status_usb_mode.sh"},
-      {"name": "HID + NET", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid_net_only"},
-      {"name": "HID + NET + MSD", "action": "{P4WN_HOME}/hooks/select_gadget.sh hid_storage_net"},
-      {"name": "Storage Only", "action": "{P4WN_HOME}/hooks/select_gadget.sh storage_only"},
-      {"name": "← Back" }
+      { "name": "Current:", "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
+
+      {
+        "name": "Select Mode",
+        "selector": {
+          "choices": [
+            { "label": "HID + NET",        "value": "hid_net_only" },
+            { "label": "HID + NET + MSD",  "value": "hid_storage_net" },
+            { "label": "Storage Only",     "value": "storage_only" }
+          ],
+          "action_template": "sudo {P4WN_HOME}/p4wnctl.py usb set {value}"
+        },
+        "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status"
+      },
+
+      { "name": "HID + NET (apply)",       "action": "sudo {P4WN_HOME}/p4wnctl.py usb set hid_net_only" },
+      { "name": "HID + NET + MSD (apply)", "action": "sudo {P4WN_HOME}/p4wnctl.py usb set hid_storage_net" },
+      { "name": "Storage Only (apply)",    "action": "sudo {P4WN_HOME}/p4wnctl.py usb set storage_only" },
+
+      { "name": "← Back" }
     ]
   },
-  {
-    "name": "Shell Access",
-    "submenu": [
-      {"name": "Start Serial Shell", "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.sh"},
-      {"name": "Stop Serial Shell", "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
-      {"name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.sh" },
-      {"name": "Stop Tmux Shell", "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
-      {"name": "Reverse Shell to Host", "action": "bash {P4WN_HOME}/payloads/shell/reverse_to_host.sh" },
-      {"name": "← Back" }
-    ]
-  },
-  {"name": "Mass Storage Injector", "script": "{P4WN_HOME}/payloads/mass_storage.sh"},
+
   {
     "name": "Payloads",
     "submenu": [
-      {"name": "Current: (read)", "script": "{P4WN_HOME}/hooks/status_payload.sh"},
-      {"name": "Set Payload: reverse_shell", "action": "bash /opt/p4wnp1/hooks/select_payload.sh reverse_shell" },
-      {"name": "Set Payload: autorun_powershell", "action": "bash /opt/p4wnp1/hooks/select_payload.sh autorun_powershell" },
-      {"name": "Set Payload: test_typing", "action": "bash /opt/p4wnp1/hooks/select_payload.sh test_typing" },
-      {"name": "← Back" }
+      { "name": "Current:", "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
+
+      {
+        "name": "Active Payload",
+        "selector": {
+          "choices": [
+            { "label": "reverse_shell",      "value": "reverse_shell" },
+            { "label": "autorun_powershell", "value": "autorun_powershell" },
+            { "label": "test_typing",        "value": "test_typing" }
+          ],
+          "action_template": "sudo {P4WN_HOME}/p4wnctl.py payload set {value}"
+        },
+        "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status"
+      },
+
+      { "name": "Set: reverse_shell",      "action": "sudo {P4WN_HOME}/p4wnctl.py payload set reverse_shell" },
+      { "name": "Set: autorun_powershell", "action": "sudo {P4WN_HOME}/p4wnctl.py payload set autorun_powershell" },
+      { "name": "Set: test_typing",        "action": "sudo {P4WN_HOME}/p4wnctl.py payload set test_typing" },
+
+      { "name": "← Back" }
     ]
   },
+
   {
-    "name": "Show IP", "script": "{P4WN_HOME}/oled/show_ip.py"
+    "name": "Web UI",
+    "submenu": [
+      { "name": "Status:", "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
+
+      {
+        "name": "Bind (Host:Port)",
+        "selector": {
+          "choices": [
+            { "label": "127.0.0.1:8080",  "value": "--host 127.0.0.1 --port 8080" },
+            { "label": "10.13.37.1:8080", "value": "--host 10.13.37.1 --port 8080" },
+            { "label": "0.0.0.0:8080",    "value": "--host 0.0.0.0 --port 8080" },
+            { "label": "127.0.0.1:8000",  "value": "--host 127.0.0.1 --port 8000" },
+            { "label": "0.0.0.0:9090",    "value": "--host 0.0.0.0 --port 9090" }
+          ],
+          "action_template": "sudo {P4WN_HOME}/p4wnctl.py web config set {value}"
+        },
+        "status_cmd": "{P4WN_HOME}/p4wnctl.py web status"
+      },
+
+      { "name": "Start",   "action": "sudo {P4WN_HOME}/p4wnctl.py web start" },
+      { "name": "Stop",    "action": "sudo {P4WN_HOME}/p4wnctl.py web stop" },
+      { "name": "Restart", "action": "sudo {P4WN_HOME}/p4wnctl.py web restart" },
+      { "name": "Enable",  "action": "sudo {P4WN_HOME}/p4wnctl.py web enable" },
+      { "name": "Disable", "action": "sudo {P4WN_HOME}/p4wnctl.py web disable" },
+
+      { "name": "← Back" }
+    ]
   },
+
+  {
+    "name": "HID Attacks",
+    "submenu": [
+      { "name": "PowerShell Reverse Shell", "script": "{P4WN_HOME}/payloads/hid/reverse_shell.sh" },
+      { "name": "USB Stealer",              "script": "{P4WN_HOME}/payloads/hid/usb_stealer.sh" },
+      { "name": "Domain Enumerator",        "script": "{P4WN_HOME}/payloads/hid/domain_enum_hid.sh" },
+      { "name": "Lockpicker",               "script": "{P4WN_HOME}/payloads/hid/lockpicker.sh" },
+      { "name": "Test Typing",              "script": "{P4WN_HOME}/payloads/hid/test_typing.sh" },
+      { "name": "← Back" }
+    ]
+  },
+
+  {
+    "name": "Network Attacks",
+    "submenu": [
+      { "name": "Rogue DHCP + DNS",       "script": "{P4WN_HOME}/payloads/network/rogue_dhcp_dns.sh" },
+      { "name": "DNS Spoof & Redirect",   "script": "{P4WN_HOME}/payloads/network/dns_spoof_redirect.sh" },
+      { "name": "Responder Attack",       "script": "{P4WN_HOME}/payloads/network/responder_attack.sh" },
+      { "name": "Credential Snarf + Spoof","script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.sh" },
+      { "name": "← Back" }
+    ]
+  },
+
+  {
+    "name": "Listeners",
+    "submenu": [
+      { "name": "Reverse Shell Listener", "script": "{P4WN_HOME}/payloads/listeners/revshell_listener.sh" },
+      { "name": "HID Backdoor Listener",  "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.sh" },
+      { "name": "← Back" }
+    ]
+  },
+
+  {
+    "name": "Shell Access",
+    "submenu": [
+      { "name": "Start Serial Shell",             "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.sh" },
+      { "name": "Stop Serial Shell",              "action": "sudo systemctl stop serial-getty@ttyGS0.service" },
+      { "name": "Start Tmux Shell (USB-Ethernet)","script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.sh" },
+      { "name": "Stop Tmux Shell",                "action": "sudo pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
+      { "name": "Reverse Shell to Host",          "action": "bash {P4WN_HOME}/payloads/shell/reverse_to_host.sh" },
+      { "name": "← Back" }
+    ]
+  },
+
+  { "name": "Mass Storage Injector", "script": "{P4WN_HOME}/payloads/mass_storage.sh" },
+
   {
     "name": "System",
     "submenu": [
-      {"name": "Reboot", "action": "sudo reboot"},
-      {"name": "Shutdown", "action": "sudo poweroff"},
-      {"name": "← Back" }
+      { "name": "Reboot",   "action": "sudo reboot" },
+      { "name": "Shutdown", "action": "sudo poweroff" },
+      { "name": "← Back" }
     ]
   }
 ]
