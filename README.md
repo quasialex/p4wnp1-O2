@@ -24,6 +24,9 @@ A stealthy, modular payload launcher and HID/network attack framework for Raspbe
 * (Optional) Waveshare 1.3″ OLED HAT (SH1106 on I²C `0x3C`)
 * (Optional) USB-A gadget board/shim
 
+**OS:** tested on **Kali Linux (Raspberry Pi)** (2025.x).  
+Expected to work on Raspberry Pi OS Bookworm; not formally tested here.
+
 ---
 
 ## Repository layout

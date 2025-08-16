@@ -1,0 +1,10 @@
+{
+  "name": "autorun_powershell",
+  "script": "payloads/hid/autorun_powershell.py",
+  "args": [],
+  "working_dir": "/opt/p4wnp1",
+  "harden": true,
+  "preflight": [
+    "test -f /opt/p4wnp1/payloads/hid/autorun_powershell.py || { echo '[!] payloads/hid/autorun_powershell.py missing'; exit 66; }"
+  ]
+}

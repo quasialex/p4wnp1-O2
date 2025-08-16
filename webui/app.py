@@ -7,7 +7,9 @@ from services import status as st
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
-WEBUI_TOKEN = os.getenv("WEBUI_TOKEN")
+HOST = os.getenv("WEBUI_HOST", "127.0.0.1")
+PORT = int(os.getenv("WEBUI_PORT", "8080"))
+TOKEN = os.getenv("WEBUI_TOKEN", "")
 
 @app.before_request
 def require_token():

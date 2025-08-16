@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-import argparse
 import os
-import subprocess
 import sys
+import json
+import curses
+import subprocess
 from pathlib import Path
 from textwrap import dedent
-import curses
 
 # ======= Paths / constants =======
 P4WN_HOME = Path(os.environ.get("P4WN_HOME", "/opt/p4wnp1"))
@@ -18,7 +18,19 @@ WEBUI_UNIT = "p4wnp1-webui.service"
 WEBUI_OVERRIDE_DIR = Path(f"/etc/systemd/system/{WEBUI_UNIT}.d")
 WEBUI_OVERRIDE_FILE = WEBUI_OVERRIDE_DIR / "override.conf"
 
-# Known units for convenience (show in TUI Services submenu)
+# Payload discovery
+PAYLOAD_DIRS = [
+    P4WN_HOME / "payloads",
+    P4WN_HOME / "payloads" / "hid",
+    P4WN_HOME / "payloads" / "network",
+    P4WN_HOME / "payloads" / "listeners",
+    P4WN_HOME / "payloads" / "shell",
+]
+PAYLOAD_MANIFEST_DIRS = [P4WN_HOME / "payloads" / "manifests"]
+
+TRANSIENT_UNIT_PREFIX = "p4w-payload-"
+
+# Known units for Services submenu (optional convenience)
 SERVICE_UNITS = [
     ("USB Core", "p4wnp1.service"),
     ("USB Prep", "p4wnp1-usb-prep.service"),
@@ -45,9 +57,8 @@ def last_line(txt: str) -> str:
             return ln
     return ""
 
-# ======= Service management =======
+# ======= Service management (generic) =======
 def svc_paths(unit: str) -> tuple[Path, Path]:
-    """Return (src, dst) for a unit file, searching /opt/p4wnp1/systemd/<unit> then /opt/p4wnp1/<unit>."""
     src1 = P4WN_HOME / "systemd" / unit
     src2 = P4WN_HOME / unit
     dst  = Path("/etc/systemd/system") / unit
@@ -99,11 +110,19 @@ def usb_preflight():
         sys.exit(3)
 
 def usb_status_text() -> str:
+    try:
+        mounts = Path("/proc/mounts").read_text()
+    except Exception:
+        mounts = ""
+    cfg_mounted = " configfs " in mounts
+
     if not USB_GADGET.exists():
-        return "USB: none"
+        return "USB: none (configfs mounted, no gadget)" if cfg_mounted else "USB: unavailable (configfs not mounted)"
+
     funcs = USB_GADGET / "functions"
     if not funcs.exists():
-        return "USB: none"
+        return "USB: none (gadget dir present, no functions)"
+
     hid   = (funcs / "hid.usb0").exists()
     rndis = (funcs / "rndis.usb0").exists()
     ecm   = (funcs / "ecm.usb0").exists()
@@ -159,7 +178,203 @@ USB_CHOICES = [
     ("Storage Only", "storage_only")
 ]
 
-# ======= Payloads =======
+# ======= Payload discovery / manifests =======
+def _manifest_paths():
+    paths = []
+    for d in PAYLOAD_MANIFEST_DIRS:
+        if d.exists():
+            paths += sorted(d.glob("*.json"))
+    return paths
+
+def load_manifests():
+    """
+    Manifest fields (choose ONE of 'cmd' | 'bin' | 'script'):
+      name:         str (required)
+      cmd:          str (shell string, runs under bash -lc; env expands)
+      bin:          str (program to exec)
+      args:         list[str] (optional; used with 'bin' or 'script')
+      script:       str (path to a Python file under /opt/p4wnp1/payloads/**)
+      env:          {k: v} (optional)
+      working_dir:  str (optional)
+      harden:       bool (default True)
+      preflight:    list[str] shell commands (optional; fail fast if any nonzero)
+    """
+    out = {}
+    for p in _manifest_paths():
+        try:
+            data = json.loads(p.read_text())
+            name = str(data.get("name", "")).strip()
+            if not name:
+                continue
+            # resolve relative 'script' path
+            if "script" in data and data["script"]:
+                sp = Path(data["script"])
+                if not sp.is_absolute():
+                    sp = (P4WN_HOME / sp).resolve()
+                data["script"] = str(sp)
+            out[name] = data
+        except Exception:
+            continue
+    return out
+
+def find_python_script(name: str) -> Path | None:
+    candidates = []
+    for r in PAYLOAD_DIRS:
+        candidates.append(r / f"{name}.py")
+        candidates.append(r / "hid" / f"{name}.py")
+        candidates.append(r / "network" / f"{name}.py")
+        candidates.append(r / "listeners" / f"{name}.py")
+        candidates.append(r / "shell" / f"{name}.py")
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
+
+def list_payload_names() -> list[str]:
+    names = set()
+    # manifests
+    names.update(load_manifests().keys())
+    # python files (optional)
+    for r in PAYLOAD_DIRS:
+        if not r.exists(): continue
+        for p in r.glob("*.py"):
+            names.add(p.stem)
+        for cat in ("hid","network","listeners","shell"):
+            d = r / cat
+            if d.exists():
+                for p in d.glob("*.py"):
+                    names.add(p.stem)
+    # legacy .sh (if any remain locally)
+    for r in PAYLOAD_DIRS:
+        if not r.exists(): continue
+        for p in r.glob("*.sh"):
+            names.add(p.stem)
+        for cat in ("hid","network","listeners","shell"):
+            d = r / cat
+            if d.exists():
+                for p in d.glob("*.sh"):
+                    names.add(p.stem)
+    return sorted(names)
+
+def transient_unit_name(name: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in name.lower())
+    return f"{TRANSIENT_UNIT_PREFIX}{safe}.service"
+
+def payload_status_text_by_name(name: str) -> str:
+    unit = transient_unit_name(name)
+    active = systemctl("is-active", unit).stdout.strip() or "unknown"
+    enabled = systemctl("is-enabled", unit).stdout.strip() or "transient"
+    return f"{name} [{unit}]: {active} ({enabled})"
+
+def _apply_env_and_cwd(cmd: str, env: dict | None, wdir: str | None) -> str:
+    parts = []
+    if env:
+        for k, v in env.items():
+            parts.append(f'export {k}={json.dumps(str(v))};')
+    if wdir:
+        parts.append(f'cd {json.dumps(wdir)};')
+    parts.append(cmd)
+    return " ".join(parts)
+
+def _run_preflight(env: dict | None, wdir: str | None, pre: list[str] | None) -> int:
+    if not pre:
+        return 0
+    seq = " && ".join(pre)
+    full = _apply_env_and_cwd(seq, env, wdir)
+    cp = sh(f"/bin/bash -lc {json.dumps(full)}", check=False)
+    if cp.returncode != 0:
+        sys.stdout.write(cp.stdout); sys.stderr.write(cp.stderr)
+    return cp.returncode
+
+def payload_start(name: str) -> int:
+    need_root()
+    mans = load_manifests()
+    m = mans.get(name, {})
+
+    # Decide mode: cmd > bin > script > fallback to python file discovery
+    cmd = m.get("cmd")
+    binp = m.get("bin")
+    script = m.get("script")
+    args = m.get("args", []) or []
+    env = m.get("env", {}) or {}
+    wdir = m.get("working_dir")
+    harden = bool(m.get("harden", True))
+    pre = m.get("preflight", []) or []
+
+    # Fallback: if no manifest, try Python discovery
+    if not (cmd or binp or script):
+        sp = find_python_script(name)
+        if sp:
+            script = str(sp)
+        else:
+            print(f"No manifest or Python payload found for '{name}'. "
+                  f"Add payloads/manifests/{name}.json or {name}.py.", file=sys.stderr)
+            return 1
+
+    # Preflight checks (run once, outside systemd-run)
+    rc = _run_preflight(env, wdir, pre)
+    if rc != 0:
+        return rc
+
+    unit = transient_unit_name(name)
+    props = [
+        "--property=Restart=on-failure",
+        "--property=RestartSec=2",
+        "--property=StandardOutput=journal",
+        "--property=StandardError=journal",
+        "--collect",
+    ]
+    if harden:
+        props += [
+            "--property=NoNewPrivileges=yes",
+            "--property=PrivateTmp=yes",
+            "--property=ProtectSystem=full",
+            "--property=ProtectHome=yes",
+        ]
+    for k, v in (env or {}).items():
+        props.append(f"--setenv={k}={v}")
+    if wdir:
+        props.append(f"--working-directory={wdir}")
+
+    # Build final command executed by systemd-run (always under bash -lc for flexibility)
+    if cmd:
+        final_cmd = _apply_env_and_cwd(cmd, None, None)  # env/wdir handled via props; leave cmd clean
+    elif binp:
+        # Join bin + args as a shell string; allow ${VAR} expansion if user used it in args
+        parts = [binp] + [str(a) for a in args]
+        final_cmd = " ".join(parts)
+    else:  # script
+        py = "/usr/bin/env python3"
+        script_quoted = json.dumps(str(script))
+        arg_str = " ".join(json.dumps(str(a)) for a in (args or []))
+        final_cmd = f"{py} {script_quoted}" + (f" {arg_str}" if arg_str else "")
+
+    cmdline = f"systemd-run --unit={unit} " + " ".join(props) + " /bin/bash -lc " + json.dumps(final_cmd)
+    cp = sh(cmdline, check=False)
+    sys.stdout.write(cp.stdout); sys.stderr.write(cp.stderr)
+    return cp.returncode
+
+def payload_stop(name: str) -> int:
+    need_root()
+    unit = transient_unit_name(name)
+    return systemctl("stop", unit).returncode
+
+def payload_logs(name: str) -> int:
+    unit = transient_unit_name(name)
+    return sh(f"journalctl -u {unit} --no-pager -n 100", check=False).returncode
+
+def payload_status_named(name: str) -> int:
+    print(payload_status_text_by_name(name)); return 0
+
+def payload_status_all() -> int:
+    names = list_payload_names()
+    if not names:
+        print("(no payloads found)"); return 0
+    for name in names:
+        print(payload_status_text_by_name(name))
+    return 0
+
+# ======= Legacy "active payload" helpers (optional) =======
 def _payload_candidates(name: str):
     return [
         P4WN_HOME / f"payloads/{name}.sh",
@@ -167,6 +382,11 @@ def _payload_candidates(name: str):
         P4WN_HOME / f"payloads/network/{name}.sh",
         P4WN_HOME / f"payloads/listeners/{name}.sh",
         P4WN_HOME / f"payloads/shell/{name}.sh",
+        P4WN_HOME / f"payloads/{name}.py",
+        P4WN_HOME / f"payloads/hid/{name}.py",
+        P4WN_HOME / f"payloads/network/{name}.py",
+        P4WN_HOME / f"payloads/listeners/{name}.py",
+        P4WN_HOME / f"payloads/shell/{name}.py",
     ]
 
 def resolve_payload(name_or_path: str) -> Path | None:
@@ -194,22 +414,11 @@ def payload_status(_args=None) -> int:
     print(payload_status_text()); return 0
 
 def payload_list(_args=None) -> int:
-    seen = set()
-    roots = [
-        P4WN_HOME / "payloads",
-        P4WN_HOME / "payloads/hid",
-        P4WN_HOME / "payloads/network",
-        P4WN_HOME / "payloads/listeners",
-        P4WN_HOME / "payloads/shell",
-    ]
-    for r in roots:
-        if not r.exists(): continue
-        for p in sorted(r.glob("*.sh")):
-            name = p.stem
-            if name in seen: continue
-            seen.add(name)
-            print(name)
-    if not seen: print("(no payloads found)")
+    names = list_payload_names()
+    if names:
+        for n in names: print(n)
+    else:
+        print("(no payloads found)")
     return 0
 
 def payload_set(name: str) -> int:
@@ -223,21 +432,7 @@ def payload_set(name: str) -> int:
     return 0
 
 def get_payload_choices():
-    names = []
-    roots = [
-        P4WN_HOME / "payloads",
-        P4WN_HOME / "payloads/hid",
-        P4WN_HOME / "payloads/network",
-        P4WN_HOME / "payloads/listeners",
-        P4WN_HOME / "payloads/shell",
-    ]
-    for r in roots:
-        if not r.exists(): continue
-        for p in sorted(r.glob("*.sh")):
-            n = p.stem
-            if n not in names: names.append(n)
-    if not names:
-        names = ["reverse_shell","autorun_powershell","test_typing"]
+    names = list_payload_names()
     return [(n, n) for n in names]
 
 # ======= Web UI =======
@@ -285,6 +480,10 @@ def web_config_show(_args=None) -> int:
     return 0
 
 def web_config_set(host: str, port: int) -> int:
+    if not isinstance(port, int) or not (1 <= port <= 65535):
+        print("Port must be 1..65535", file=sys.stderr); return 1
+    if not host or any(ch.isspace() for ch in host):
+        print("Host must be a single token (no spaces).", file=sys.stderr); return 1
     _web_override_write(host, port)
     print(f"WebUI configured: {host}:{port} (override written)")
     return 0
@@ -299,14 +498,9 @@ WEB_BIND_CHOICES = [
 
 # ======= IP =======
 def ip_text() -> str:
-    """
-    List IPv4 for all relevant NICs with smart ordering:
-      1) USB-backed (sysfs path contains '/usb/')
-      2) Wired (eth*/en*)
-      3) Wi-Fi (wlan*)
-      4) Others
-    """
     base = Path("/sys/class/net")
+    if not base.exists():
+        return "No interfaces"
     ifaces = [p.name for p in base.iterdir() if p.is_dir() and p.name != "lo"]
 
     def is_usb(iface: str) -> bool:
@@ -345,7 +539,7 @@ def ip_text() -> str:
                 if ln.startswith("inet "):
                     parts = ln.split()
                     if len(parts) > 1:
-                        ipline = parts[1]  # CIDR
+                        ipline = parts[1]
                         break
         lines.append(f"{iface} ({state}): {ipline if ipline else 'no ip'}")
     return "\n".join(lines) if lines else "No interfaces"
@@ -360,7 +554,7 @@ P4wnP1-O2 control CLI
 
 Subcommands:
   usb         USB gadget controls
-  payload     Payload controls
+  payload     Payload controls (list/set + start/stop/status/logs)
   web         Web UI controls (port/host, start/stop, enable/disable)
   service     Manage systemd units (install/uninstall/start/stop/...)
   ip          Show IP addresses
@@ -379,9 +573,22 @@ PAYLOAD_HELP = dedent("""\
 Payload controls
 ----------------
 Commands:
-  payload status
   payload list
-  payload set <name>
+  payload set <name>         # legacy active payload pointer (sh/py)
+  payload status             # shows active payload pointer
+  payload status all         # transient runner states for all discovered payloads
+  payload status <name>
+  payload start <name>       # runs using manifest (cmd|bin|script)
+  payload stop <name>
+  payload logs <name>
+
+Manifests:
+  payloads/manifests/<name>.json — choose ONE of:
+    { "name": "foo", "cmd":  "<shell string with ${ENV} if you like>" }
+    { "name": "foo", "bin":  "program", "args": ["--flags","..."] }
+    { "name": "foo", "script":"payloads/path/to/foo.py", "args": [] }
+  Optional: "env": { "KEY":"VAL" }, "working_dir": "/opt/p4wnp1", "harden": true,
+            "preflight": ["command -v program >/dev/null || exit 127"]
 """)
 
 WEB_HELP = dedent(f"""\
@@ -405,10 +612,6 @@ Service controls
 ----------------
 Usage:
   p4wnctl service <install|uninstall|start|stop|restart|enable|disable|status|logs> <unit>
-
-Examples:
-  sudo p4wnctl service install oledmenu.service
-  sudo p4wnctl service restart p4wnp1.service
 """)
 
 # ======= Curses TUI (arrow-driven) =======
@@ -488,9 +691,13 @@ def tui_menu(stdscr):
     def payload_set_cur(name): return lambda: payload_set(name)
     payload_choices = get_payload_choices()
     payload_sub = MenuState("Payloads", [
-        MenuItem("Current", "status", status_fn=payload_status_text),
-        MenuItem("Select Payload", "selector", data={"choices": payload_choices}),
-        *[MenuItem(f"Apply: {lab}", "action", data={"fn": payload_set_cur(val)}) for lab, val in payload_choices[:6]],
+        MenuItem("Active (pointer)", "status", status_fn=payload_status_text),
+        MenuItem("Select Active", "selector", data={"choices": payload_choices}),
+        *[MenuItem(f"Set active: {lab}", "action", data={"fn": payload_set_cur(val)}) for lab, val in payload_choices[:6]],
+        MenuItem("--- transient runner ---", "status", status_fn=lambda: " "),
+        MenuItem("Status (all)", "action", data={"fn": lambda: payload_status_all()}),
+        *[MenuItem(f"Start: {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_start(v))[1])}) for lab, val in payload_choices[:5]],
+        *[MenuItem(f"Stop:  {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_stop(v))[1])}) for lab, val in payload_choices[:5]],
     ])
 
     web_sub = MenuState("Web UI", [
@@ -504,7 +711,6 @@ def tui_menu(stdscr):
         MenuItem("Show override", "action", data={"fn": lambda: web_config_show(None)}),
     ])
 
-    # Services submenu (install/uninstall/start/stop/etc for known units)
     def mk_svc_actions(title, unit):
         return MenuState(title, [
             MenuItem("Status",  "status", status_fn=lambda u=unit: svc_status_text(u)),
@@ -570,7 +776,7 @@ def tui_menu(stdscr):
                 elif cur.label.startswith("Bind (host:port)"):
                     host, port = value
                     rc = web_config_set(host, port)
-                elif cur.label.startswith("Select Payload"):
+                elif cur.label.startswith("Select Active"):
                     rc = payload_set(value)
                 else:
                     rc = 0
@@ -608,12 +814,26 @@ def main() -> int:
         if len(sys.argv) == 2:
             print(PAYLOAD_HELP.rstrip()); return 0
         sub = sys.argv[2].lower()
-        if sub == "status": return payload_status()
+
         if sub == "list":   return payload_list()
         if sub == "set":
-            if len(sys.argv) < 4:
-                print(PAYLOAD_HELP.rstrip()); return 1
+            if len(sys.argv) < 4: print(PAYLOAD_HELP.rstrip()); return 1
             return payload_set(sys.argv[3])
+        if sub == "status":
+            if len(sys.argv) == 3: return payload_status()
+            if len(sys.argv) == 4 and sys.argv[3] == "all": return payload_status_all()
+            if len(sys.argv) == 4: return payload_status_named(sys.argv[3])
+            print(PAYLOAD_HELP.rstrip()); return 1
+        if sub == "start":
+            if len(sys.argv) < 4: print("usage: p4wnctl payload start <name>"); return 1
+            return payload_start(sys.argv[3])
+        if sub == "stop":
+            if len(sys.argv) < 4: print("usage: p4wnctl payload stop <name>"); return 1
+            return payload_stop(sys.argv[3])
+        if sub == "logs":
+            if len(sys.argv) < 4: print("usage: p4wnctl payload logs <name>"); return 1
+            return payload_logs(sys.argv[3])
+
         print(PAYLOAD_HELP.rstrip()); return 1
 
     # web
@@ -648,7 +868,7 @@ def main() -> int:
                 return web_config_set(host, port)
         print(WEB_HELP.rstrip()); return 1
 
-    # service (generic)
+    # service
     if cmd == "service":
         if len(sys.argv) < 4:
             print(SERVICE_HELP.rstrip()); return 1
@@ -659,7 +879,6 @@ def main() -> int:
         if action == "status":
             print(svc_status_text(unit)); return 0
         if action == "logs":
-            # show short status, then tail logs
             rc1 = systemctl("status", "--no-pager", unit).returncode
             rc2 = sh(f"journalctl -u {unit} --no-pager -n 100", check=False).returncode
             return rc1 or rc2
@@ -672,10 +891,14 @@ def main() -> int:
     if cmd == "ip":
         return ip_show()
 
-    # menu
+    # menu (with fallback)
     if cmd == "menu":
-        curses.wrapper(tui_menu)
-        return 0
+        try:
+            curses.wrapper(tui_menu)
+            return 0
+        except Exception:
+            print("Menu needs an interactive terminal. Try: p4wnctl usb status / web status / service ...")
+            return 1
 
     print(MAIN_HELP.rstrip())
     return 1

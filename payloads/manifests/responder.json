@@ -1,0 +1,10 @@
+{
+  "name": "responder",
+  "cmd": "${RESPONDER_BIN:-responder} ${ARGS:-}",
+  "env": { "IFACE": "usb0", "ARGS": "" },
+  "working_dir": "/opt/p4wnp1",
+  "harden": true,
+  "preflight": [
+    "command -v \"${RESPONDER_BIN:-responder}\" >/dev/null 2>&1 || { echo '[!] responder binary not found'; exit 127; }"
+  ]
+}

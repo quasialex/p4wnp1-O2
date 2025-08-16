@@ -25,7 +25,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # OLED auto-detect helper (Waveshare 1.3 SH1106 @ 0x3C on I2C-1)
 has_oled() {
   if ! have i2cdetect; then
-    apt-get update -y && apt-get install -y i2c-tools || true
+    run apt-get update -y || true
+    run apt-get install -y i2c-tools || true
   fi
   i2cdetect -y 1 2>/dev/null | grep -qi ' 3c'
 }
@@ -41,6 +42,16 @@ WITH_OLED="auto"       # auto|yes|no
 WITH_WEBUI="yes"       # yes|no
 ENABLE_SERVICES="yes"  # yes|no (copy units but don't enable/start when 'no')
 
+# Dry-run: print actions instead of executing them
+DRY_RUN="no"
+run() {            # usage: run cmd arg1 arg2 ...
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    printf '[dry-run]'; printf ' %q' "$@"; echo
+  else
+    "$@"
+  fi
+}
+
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,6 +65,8 @@ while [[ $# -gt 0 ]]; do
     --with-webui)  shift; WITH_WEBUI="${1:-yes}";;
 
     --no-enable)   ENABLE_SERVICES="no";;
+    --dry-run)     DRY_RUN="yes";;
+
     -h|--help)
       cat <<EOF
 Usage: sudo ./install.sh [options]
@@ -69,6 +82,7 @@ Modular services:
   --with-oled auto|yes|no         Install/enable OLED (default: auto)
   --with-webui yes|no             Install/enable Web UI (default: yes)
   --no-enable                     Copy unit files but don't enable/start any
+  --dry-run                       Print actions; do not change the system
 
 Examples:
   USB only (no OLED/web):      --with-usb yes --with-oled no --with-webui no
@@ -86,13 +100,13 @@ done
 need_root
 
 echo "[*] Installing to $INSTALL_DIR ..."
-mkdir -p "$INSTALL_DIR"
-if ! have rsync; then apt update && apt install -y rsync; fi
-rsync -aH --delete "$REPO_DIR"/ "$INSTALL_DIR"/
+run mkdir -p "$INSTALL_DIR"
+if ! have rsync; then run apt update && run apt install -y rsync; fi
+run rsync -aH --delete "$REPO_DIR"/ "$INSTALL_DIR"/
 
 echo "[*] Installing OS deps ..."
-apt update
-DEBIAN_FRONTEND=noninteractive apt install -y python3 python3-pip dnsmasq hostapd
+run apt update
+run env DEBIAN_FRONTEND=noninteractive apt install -y python3 python3-pip dnsmasq hostapd
 
 echo "[*] Python deps ..."
 PIP_FLAGS=""
@@ -100,18 +114,22 @@ if pip3 install --help 2>/dev/null | grep -q -- '--break-system-packages'; then
   PIP_FLAGS="--break-system-packages"
 fi
 # Always needed:
-pip3 install $PIP_FLAGS netifaces luma.oled
+run pip3 install $PIP_FLAGS netifaces luma.oled
 # Flask only if WebUI requested:
 if [[ "$WITH_WEBUI" == "yes" ]]; then
-  pip3 install $PIP_FLAGS flask
+  run pip3 install $PIP_FLAGS flask
 fi
 
 # --- Enable dwc2 overlay for USB gadget ---
 BOOTCFG="/boot/config.txt"
 [[ -f /boot/firmware/config.txt ]] && BOOTCFG="/boot/firmware/config.txt"
 if ! grep -q '^dtoverlay=dwc2' "$BOOTCFG" 2>/dev/null; then
-  echo 'dtoverlay=dwc2' >> "$BOOTCFG"
-  echo "[*] Added dtoverlay=dwc2 to $BOOTCFG"
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    echo "[dry-run] would append 'dtoverlay=dwc2' to $BOOTCFG"
+  else
+    echo 'dtoverlay=dwc2' >> "$BOOTCFG"
+    echo "[*] Added dtoverlay=dwc2 to $BOOTCFG"
+  fi
 else
   echo "[*] dwc2 already enabled"
 fi
@@ -122,11 +140,11 @@ inst_unit() {
   local name="$1"
   local src=""
   if   [[ -f "$INSTALL_DIR/systemd/$name" ]]; then src="$INSTALL_DIR/systemd/$name"
-  elif [[ -f "$INSTALL_DIR/$name" ]]; then       src="$INSTALL_DIR/$name"
+  elif [[ -f "$INSTALL_DIR/$name"          ]]; then src="$INSTALL_DIR/$name"
   else
     return 0
   fi
-  install -m 0644 "$src" "/etc/systemd/system/$name"
+  run install -m 0644 "$src" "/etc/systemd/system/$name"
   echo "  - installed $name (from $(realpath "$src" 2>/dev/null || echo "$src"))"
 }
 inst_unit "$P4WNP1_UNIT"
@@ -134,13 +152,13 @@ inst_unit "$USB_PREP_UNIT"
 inst_unit "$OLED_UNIT"
 inst_unit "$WEBUI_UNIT"
 
-systemctl daemon-reload
+run systemctl daemon-reload
 
 # --- Enable/Start selected services ---
 start_unit() {
   local u="$1"
-  systemctl enable "$u" 2>/dev/null || true
-  systemctl restart "$u" 2>/dev/null || true
+  run systemctl enable "$u" 2>/dev/null || true
+  run systemctl restart "$u" 2>/dev/null || true
 }
 
 # USB core (p4wnp1 + optional usb-prep)
@@ -182,20 +200,25 @@ else
 fi
 
 # --- Ensure executables ---
-chmod +x "$INSTALL_DIR"/config/usb_gadgets/*.sh 2>/dev/null || true
-chmod +x "$INSTALL_DIR"/hooks/*.sh 2>/dev/null || true
-chmod +x "$INSTALL_DIR"/oled/run_oled_menu.sh 2>/dev/null || true
-[ -f "$INSTALL_DIR/p4wnctl.py" ] && chmod +x "$INSTALL_DIR/p4wnctl.py"
+run chmod +x "$INSTALL_DIR"/config/usb_gadgets/*.sh 2>/dev/null || true
+run chmod +x "$INSTALL_DIR"/hooks/*.sh 2>/dev/null || true
+run chmod +x "$INSTALL_DIR"/oled/run_oled_menu.sh 2>/dev/null || true
+[[ -f "$INSTALL_DIR/p4wnctl.py" ]] && run chmod +x "$INSTALL_DIR/p4wnctl.py"
 
 # --- Create mass-storage file if missing ---
 MSD="$INSTALL_DIR/usb_mass_storage.img"
 if [[ ! -f "$MSD" ]]; then
   echo "[*] Creating 128MB VFAT mass-storage image ..."
-  dd if=/dev/zero of="$MSD" bs=1M count=128
-  mkfs.vfat "$MSD"
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    echo "[dry-run] dd if=/dev/zero of=\"$MSD\" bs=1M count=128"
+    echo "[dry-run] mkfs.vfat \"$MSD\""
+  else
+    run dd if=/dev/zero of="$MSD" bs=1M count=128
+    run mkfs.vfat "$MSD"
+  fi
 fi
 
-# --- Optional: sudoers for OLED/CLI (if your OLED service runs under a user) ---
+# --- Optional: sudoers for OLED/CLI ---
 add_sudoers() {
   local user="$1"
   if ! id -u "$user" >/dev/null 2>&1; then
@@ -208,11 +231,15 @@ $user ALL=(root) NOPASSWD: /opt/p4wnp1/hooks/select_gadget.sh
 $user ALL=(root) NOPASSWD: /opt/p4wnp1/hooks/gadget_reset.sh
 $user ALL=(root) NOPASSWD: /opt/p4wnp1/p4wnctl.py
 EOF
-  if visudo -cf "$tmp" >/dev/null 2>&1; then
-    install -m 0440 "$tmp" "$dst"
-    echo "[*] Sudoers configured for '$user' at $dst"
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    echo "[dry-run] would create sudoers at $dst"
   else
-    echo "[!] visudo validation failed; not installing sudoers for '$user'."
+    if visudo -cf "$tmp" >/dev/null 2>&1; then
+      run install -m 0440 "$tmp" "$dst"
+      echo "[*] Sudoers configured for '$user' at $dst"
+    else
+      echo "[!] visudo validation failed; not installing sudoers for '$user'."
+    fi
   fi
   rm -f "$tmp"
 }
@@ -221,21 +248,24 @@ if [[ -z "$TARGET_USER" && -n "${SUDO_USER:-}" ]]; then TARGET_USER="$SUDO_USER"
 if [[ -z "$TARGET_USER" && -t 0 ]]; then read -r -p "[?] Add sudoers rule for which user (leave empty to skip)? " TARGET_USER; fi
 if [[ -n "$TARGET_USER" ]]; then add_sudoers "$TARGET_USER"; else echo "[*] Skipping sudoers setup."; fi
 
-# --- Web UI bind + auth token (systemd override ONLY; units are not modified) ---
+# --- Web UI bind + auth token (systemd override ONLY) ---
 if [[ "$WITH_WEBUI" == "yes" ]]; then
   echo "[*] Configuring Web UI bind and token ..."
-  mkdir -p "$WEBUI_OVERRIDE_DIR"
-  {
-    echo "[Service]"
-    echo "Environment=\"WEBUI_HOST=${WEBUI_HOST}\" \"WEBUI_PORT=${WEBUI_PORT}\""
-    if [[ -n "$WEBUI_TOKEN" ]]; then
-      echo "Environment=\"WEBUI_TOKEN=${WEBUI_TOKEN}\""
-    fi
-  } > "$WEBUI_OVERRIDE_FILE"
+  if [[ "$DRY_RUN" == "yes" ]]; then
+    echo "[dry-run] would write $WEBUI_OVERRIDE_FILE with:"
+    echo "  WEBUI_HOST=${WEBUI_HOST} WEBUI_PORT=${WEBUI_PORT} WEBUI_TOKEN=${WEBUI_TOKEN}"
+  else
+    run mkdir -p "$WEBUI_OVERRIDE_DIR"
+    {
+      echo "[Service]"
+      echo "Environment=\"WEBUI_HOST=${WEBUI_HOST}\" \"WEBUI_PORT=${WEBUI_PORT}\""
+      [[ -n "$WEBUI_TOKEN" ]] && echo "Environment=\"WEBUI_TOKEN=${WEBUI_TOKEN}\""
+    } > "$WEBUI_OVERRIDE_FILE"
 
-  if [[ "$ENABLE_SERVICES" == "yes" ]]; then
-    systemctl daemon-reload
-    systemctl restart "$WEBUI_UNIT" || true
+    if [[ "$ENABLE_SERVICES" == "yes" ]]; then
+      run systemctl daemon-reload
+      run systemctl restart "$WEBUI_UNIT" || true
+    fi
   fi
 fi
 
@@ -250,7 +280,7 @@ for f in \
 do
   if [[ -e "$INSTALL_DIR/$f" ]]; then
     echo "[*] Removing legacy $f"
-    rm -rf "$INSTALL_DIR/$f"
+    run rm -rf "$INSTALL_DIR/$f"
   fi
 done
 

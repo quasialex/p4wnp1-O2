@@ -1,0 +1,7 @@
+{
+  "name": "reverse_shell",
+  "kind": "hid",
+  "cmd": [ "/bin/bash", "-lc", "/opt/p4wnp1/extras/reverse_shell.sh" ],
+  "working_dir": "/opt/p4wnp1",
+  "harden": true
+}

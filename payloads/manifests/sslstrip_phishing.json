@@ -1,0 +1,10 @@
+{
+  "name": "sslstrip_phishing",
+  "cmd": "${SSLSTRIP_BIN:-sslstrip} ${ARGS:-}",
+  "env": { "IFACE": "usb0", "ARGS": "" },
+  "working_dir": "/opt/p4wnp1",
+  "harden": true,
+  "preflight": [
+    "command -v \"${SSLSTRIP_BIN:-sslstrip}\" >/dev/null 2>&1 || { echo '[!] sslstrip binary not found'; exit 127; }"
+  ]
+}

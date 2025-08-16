@@ -1,13 +1,20 @@
+# Python
 __pycache__/
 *.pyc
-*.log
-*.swp
-*.img
-*.tmp
-*.bak
-*.pid
-*.state
-/data/
-/logs/
-/mnt/
-/tmp/
+*.pyo
+
+# Generated
+usb_mass_storage.img
+logs/*
+!.gitkeep
+
+# Local env
+.env
+venv/
+.venv/
+
+# Editor junk
+.DS_Store
+.idea/
+.vscode/
+
