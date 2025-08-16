@@ -4,8 +4,8 @@ __pycache__/
 *.pyo
 
 # Generated
-usb_mass_storage.img
-logs/*
+*.img
+logs/
 !.gitkeep
 
 # Local env

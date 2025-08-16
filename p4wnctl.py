@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import os
 import sys
 import json
 import curses
+import socket
+import ipaddress
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -38,6 +41,13 @@ SERVICE_UNITS = [
     ("Web UI", "p4wnp1-webui.service"),
 ]
 
+# Defaults for gadget network and MSD
+USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
+USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
+USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")   # configurable, no hardcoding in payloads
+MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
+MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "64"))
+
 # ======= Small helpers =======
 def sh(cmd: str, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, check=check)
@@ -56,6 +66,66 @@ def last_line(txt: str) -> str:
         if ln:
             return ln
     return ""
+
+def which(path: str) -> str | None:
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        c = Path(d) / path
+        if c.is_file() and os.access(c, os.X_OK):
+            return str(c)
+    return None
+
+# ======= Dynamic IP helpers =======
+def _ip_json() -> list[dict]:
+    ip_bin = which("ip") or "/sbin/ip"
+    try:
+        out = sh(f"{ip_bin} -json addr show", check=False).stdout
+        return json.loads(out) if out else []
+    except Exception:
+        return []
+
+def ips_by_iface() -> dict[str, list[str]]:
+    data = _ip_json()
+    res: dict[str, list[str]] = {}
+    for link in data:
+        ifname = link.get("ifname")
+        for a in link.get("addr_info", []) or []:
+            if a.get("family") == "inet":
+                res.setdefault(ifname, []).append(a.get("local"))
+    return res
+
+def primary_iface(order=("usb0", "eth0", "wlan0")) -> str | None:
+    mapping = ips_by_iface()
+    for want in order:
+        if want in mapping and mapping[want]:
+            return want
+    for k, v in mapping.items():
+        if k.startswith("enx") and v:
+            return k
+    for k, v in mapping.items():
+        if v:
+            return k
+    return None
+
+def primary_ip(order=("usb0", "eth0", "wlan0")) -> str | None:
+    mapping = ips_by_iface()
+    for want in order:
+        if want in mapping and mapping[want]:
+            return mapping[want][0]
+    for k, v in mapping.items():
+        if k.startswith("enx") and v:
+            return v[0]
+    for v in mapping.values():
+        if v:
+            return v[0]
+    # default-route trick
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
 
 # ======= Service management (generic) =======
 def svc_paths(unit: str) -> tuple[Path, Path]:
@@ -96,7 +166,7 @@ def svc_status_text(unit: str) -> str:
     enabled = systemctl("is-enabled", unit).stdout.strip() or "unknown"
     return f"{unit}: {active} ({enabled})"
 
-# ======= USB =======
+# ======= USB (Python gadget builder, no .sh) =======
 def usb_preflight():
     sh("modprobe configfs || true", check=False)
     sh("mount -t configfs none /sys/kernel/config || true", check=False)
@@ -108,6 +178,196 @@ def usb_preflight():
               "    Add 'dtoverlay=dwc2' to /boot/config.txt (or /boot/firmware/config.txt) and reboot.",
               file=sys.stderr)
         sys.exit(3)
+
+def _hid_report_desc_bytes() -> bytes:
+    # Keyboard report descriptor (8 bytes)
+    return bytes([
+        0x05,0x01, 0x09,0x06, 0xA1,0x01, 0x05,0x07,
+        0x19,0xE0, 0x29,0xE7, 0x15,0x00, 0x25,0x01,
+        0x75,0x01, 0x95,0x08, 0x81,0x02, 0x95,0x01,
+        0x75,0x08, 0x81,0x03, 0x95,0x05, 0x75,0x01,
+        0x05,0x08, 0x19,0x01, 0x29,0x05, 0x91,0x02,
+        0x95,0x01, 0x75,0x03, 0x91,0x03, 0x95,0x06,
+        0x75,0x08, 0x15,0x00, 0x25,0x65, 0x05,0x07,
+        0x19,0x00, 0x29,0x65, 0x81,0x00, 0xC0
+    ])
+
+def _ensure_msd_image():
+    if MSD_IMAGE.exists():
+        return
+    MSD_IMAGE.parent.mkdir(parents=True, exist_ok=True)
+    with open(MSD_IMAGE, "wb") as f:
+        f.truncate(MSD_SIZE_MB * 1024 * 1024)
+
+def _unlink_all(cfg_dir: Path):
+    for l in list(cfg_dir.iterdir()):
+        if l.is_symlink():
+            try: l.unlink()
+            except Exception: pass
+
+def _remove_dir_tree(p: Path):
+    if not p.exists(): return
+    for child in sorted(p.iterdir(), reverse=True):
+        if child.is_symlink():
+            try: child.unlink()
+            except Exception: pass
+        elif child.is_dir():
+            _remove_dir_tree(child)
+        else:
+            try: child.unlink()
+            except Exception: pass
+    try: p.rmdir()
+    except Exception: pass
+
+def usb_unbind():
+    if USB_GADGET.exists():
+        udc = USB_GADGET / "UDC"
+        try:
+            # Writing empty string unbinds
+            udc.write_text("")
+        except Exception:
+            pass
+
+def usb_teardown():
+    usb_unbind()
+    # remove functions/configs under gadget (but keep gadget folder)
+    for sub in ("functions", "configs"):
+        base = USB_GADGET / sub
+        if not base.exists(): continue
+        for x in list(base.iterdir()):
+            if sub == "configs":
+                _unlink_all(x)
+            _remove_dir_tree(x)
+
+def _write(path: Path, content: str | bytes):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, bytes):
+        with open(path, "wb") as f: f.write(content)
+    else:
+        path.write_text(content)
+
+def _bind_first_udc():
+    udcs = sorted([p.name for p in Path("/sys/class/udc").iterdir()])
+    if not udcs:
+        raise RuntimeError("No UDC available")
+    (USB_GADGET / "UDC").write_text(udcs[0])
+
+def _gadget_common_init():
+    USB_GADGET.mkdir(parents=True, exist_ok=True)
+    _write(USB_GADGET / "idVendor", "0x1d6b")   # Linux Foundation (example)
+    _write(USB_GADGET / "idProduct", "0x0104")  # Multifunction Composite Gadget (example)
+    _write(USB_GADGET / "bcdDevice", "0x0100")
+    _write(USB_GADGET / "bcdUSB", "0x0200")
+
+    s = USB_GADGET / "strings/0x409"
+    _write(s / "serialnumber", "P4wnP1-O2")
+    _write(s / "manufacturer", "quasialex")
+    _write(s / "product", "P4wnP1-O2 Gadget")
+
+    cfg = USB_GADGET / "configs/c.1"
+    _write(cfg / "MaxPower", "250")
+    _write(USB_GADGET / "configs/c.1/strings/0x409/configuration", "Config 1")
+
+def _func_hid():
+    f = USB_GADGET / "functions/hid.usb0"
+    f.mkdir(parents=True, exist_ok=True)
+    _write(f / "protocol", "1")
+    _write(f / "subclass", "1")
+    _write(f / "report_length", "8")
+    _write(f / "report_desc", _hid_report_desc_bytes())
+    return f
+
+def _func_ecm():
+    f = USB_GADGET / "functions/ecm.usb0"
+    f.mkdir(parents=True, exist_ok=True)
+    _write(f / "dev_addr", USB_NET_DEVADDR)
+    _write(f / "host_addr", USB_NET_HOSTADDR)
+    return f
+
+def _func_rndis():
+    f = USB_GADGET / "functions/rndis.usb0"
+    f.mkdir(parents=True, exist_ok=True)
+    _write(f / "dev_addr", USB_NET_DEVADDR)
+    _write(f / "host_addr", USB_NET_HOSTADDR)
+    # Optional OS descriptors could be added here if needed.
+    return f
+
+def _func_msd():
+    _ensure_msd_image()
+    f = USB_GADGET / "functions/mass_storage.usb0"
+    f.mkdir(parents=True, exist_ok=True)
+    _write(f / "stall", "0")
+    _write(f / "lun.0/removable", "1")
+    _write(f / "lun.0/ro", "0")
+    _write(f / "lun.0/file", str(MSD_IMAGE))
+    return f
+
+def _link(f: Path, cfg: Path):
+    ln = cfg / f.name
+    if not ln.exists():
+        ln.symlink_to(f)
+
+def _ensure_usb0_ip():
+    # Assign a default CIDR if usb0 exists and has no IP; make it configurable
+    ip_bin = which("ip") or "/sbin/ip"
+    q = sh(f"{ip_bin} -4 addr show usb0", check=False).stdout
+    has_ip = "inet " in (q or "")
+    if not has_ip and USB0_CIDR:
+        sh(f"{ip_bin} addr add {USB0_CIDR} dev usb0 2>/dev/null || true", check=False)
+        sh(f"{ip_bin} link set usb0 up 2>/dev/null || true", check=False)
+
+def usb_apply_mode(mode: str) -> int:
+    """
+    Build/replace gadget in pure Python.
+    Modes:
+      - hid_net_only        (HID + ECM + RNDIS)
+      - hid_storage_net     (HID + ECM + RNDIS + MSD)
+      - storage_only        (MSD only)
+    """
+    need_root()
+    usb_preflight()
+    _gadget_common_init()
+    cfg = USB_GADGET / "configs/c.1"
+
+    # unbind and teardown any existing functions/links
+    usb_teardown()
+
+    # Re-init base after teardown
+    _gadget_common_init()
+
+    if mode == "hid_net_only":
+        f_hid = _func_hid()
+        f_ecm = _func_ecm()
+        f_rnd = _func_rndis()
+        _link(f_hid, cfg)
+        _link(f_ecm, cfg)
+        _link(f_rnd, cfg)
+    elif mode == "hid_storage_net":
+        f_hid = _func_hid()
+        f_ecm = _func_ecm()
+        f_rnd = _func_rndis()
+        f_msd = _func_msd()
+        _link(f_hid, cfg)
+        _link(f_ecm, cfg)
+        _link(f_rnd, cfg)
+        _link(f_msd, cfg)
+    elif mode == "storage_only":
+        f_msd = _func_msd()
+        _link(f_msd, cfg)
+    else:
+        print(f"Unknown mode: {mode}", file=sys.stderr)
+        return 4
+
+    # bind
+    try:
+        _bind_first_udc()
+    except Exception as e:
+        print(f"Bind failed: {e}", file=sys.stderr)
+        return 6
+
+    # Make sure usb0 shows up with a usable IP (configurable)
+    _ensure_usb0_ip()
+    return 0
 
 def usb_status_text() -> str:
     try:
@@ -155,22 +415,8 @@ def usb_status(_args=None) -> int:
     print(usb_status_text()); return 0
 
 def usb_set(mode: str) -> int:
-    need_root()
-    usb_preflight()
-    script = {
-        "hid_net_only":     CONFIG / "usb_gadgets" / "hid_net_only.sh",
-        "hid_storage_net":  CONFIG / "usb_gadgets" / "hid_storage_net.sh",
-        "storage_only":     CONFIG / "usb_gadgets" / "storage_only.sh",
-    }.get(mode)
-    if not script or not script.exists():
-        print(f"Unknown mode or missing script: {mode}", file=sys.stderr)
-        return 4
-    reset = HOOKS / "gadget_reset.sh"
-    if reset.exists():
-        sh(f"bash {reset}", check=False)
-    cp = sh(f"bash {script}", check=False)
-    sys.stdout.write(cp.stdout); sys.stderr.write(cp.stderr)
-    return cp.returncode
+    # REPLACED: no bash; pure Python gadget configuration
+    return usb_apply_mode(mode)
 
 USB_CHOICES = [
     ("HID + NET", "hid_net_only"),
@@ -178,7 +424,7 @@ USB_CHOICES = [
     ("Storage Only", "storage_only")
 ]
 
-# ======= Payload discovery / manifests =======
+# ======= Payload discovery / manifests (unchanged logic) =======
 def _manifest_paths():
     paths = []
     for d in PAYLOAD_MANIFEST_DIRS:
@@ -206,7 +452,6 @@ def load_manifests():
             name = str(data.get("name", "")).strip()
             if not name:
                 continue
-            # resolve relative 'script' path
             if "script" in data and data["script"]:
                 sp = Path(data["script"])
                 if not sp.is_absolute():
@@ -232,9 +477,7 @@ def find_python_script(name: str) -> Path | None:
 
 def list_payload_names() -> list[str]:
     names = set()
-    # manifests
     names.update(load_manifests().keys())
-    # python files (optional)
     for r in PAYLOAD_DIRS:
         if not r.exists(): continue
         for p in r.glob("*.py"):
@@ -244,11 +487,10 @@ def list_payload_names() -> list[str]:
             if d.exists():
                 for p in d.glob("*.py"):
                     names.add(p.stem)
-    # legacy .sh (if any remain locally)
+    # legacy .sh discovery retained (if someone has local ones)
     for r in PAYLOAD_DIRS:
         if not r.exists(): continue
-        for p in r.glob("*.sh"):
-            names.add(p.stem)
+        for p in r.glob("*.sh"): names.add(p.stem)
         for cat in ("hid","network","listeners","shell"):
             d = r / cat
             if d.exists():
@@ -291,7 +533,6 @@ def payload_start(name: str) -> int:
     mans = load_manifests()
     m = mans.get(name, {})
 
-    # Decide mode: cmd > bin > script > fallback to python file discovery
     cmd = m.get("cmd")
     binp = m.get("bin")
     script = m.get("script")
@@ -301,7 +542,6 @@ def payload_start(name: str) -> int:
     harden = bool(m.get("harden", True))
     pre = m.get("preflight", []) or []
 
-    # Fallback: if no manifest, try Python discovery
     if not (cmd or binp or script):
         sp = find_python_script(name)
         if sp:
@@ -311,7 +551,12 @@ def payload_start(name: str) -> int:
                   f"Add payloads/manifests/{name}.json or {name}.py.", file=sys.stderr)
             return 1
 
-    # Preflight checks (run once, outside systemd-run)
+    # Always inject P4WN_LHOST (dynamic)
+    lhost = primary_ip()
+    if lhost:
+        env = dict(env or {})
+        env.setdefault("P4WN_LHOST", lhost)
+
     rc = _run_preflight(env, wdir, pre)
     if rc != 0:
         return rc
@@ -336,14 +581,12 @@ def payload_start(name: str) -> int:
     if wdir:
         props.append(f"--working-directory={wdir}")
 
-    # Build final command executed by systemd-run (always under bash -lc for flexibility)
     if cmd:
-        final_cmd = _apply_env_and_cwd(cmd, None, None)  # env/wdir handled via props; leave cmd clean
+        final_cmd = _apply_env_and_cwd(cmd, None, None)
     elif binp:
-        # Join bin + args as a shell string; allow ${VAR} expansion if user used it in args
         parts = [binp] + [str(a) for a in args]
         final_cmd = " ".join(parts)
-    else:  # script
+    else:
         py = "/usr/bin/env python3"
         script_quoted = json.dumps(str(script))
         arg_str = " ".join(json.dumps(str(a)) for a in (args or []))
@@ -374,7 +617,7 @@ def payload_status_all() -> int:
         print(payload_status_text_by_name(name))
     return 0
 
-# ======= Legacy "active payload" helpers (optional) =======
+# ======= Legacy "active payload" helpers (kept) =======
 def _payload_candidates(name: str):
     return [
         P4WN_HOME / f"payloads/{name}.sh",
@@ -480,6 +723,11 @@ def web_config_show(_args=None) -> int:
     return 0
 
 def web_config_set(host: str, port: int) -> int:
+    if host == "auto":
+        auto = primary_ip()
+        if not auto:
+            print("Could not determine primary IP for 'auto'", file=sys.stderr); return 1
+        host = auto
     if not isinstance(port, int) or not (1 <= port <= 65535):
         print("Port must be 1..65535", file=sys.stderr); return 1
     if not host or any(ch.isspace() for ch in host):
@@ -488,13 +736,34 @@ def web_config_set(host: str, port: int) -> int:
     print(f"WebUI configured: {host}:{port} (override written)")
     return 0
 
-WEB_BIND_CHOICES = [
-    ("127.0.0.1:8080", ("127.0.0.1", 8080)),
-    ("10.13.37.1:8080", ("10.13.37.1", 8080)),
-    ("0.0.0.0:8080", ("0.0.0.0", 8080)),
-    ("127.0.0.1:8000", ("127.0.0.1", 8000)),
-    ("0.0.0.0:9090", ("0.0.0.0", 9090)),
-]
+def web_url() -> int:
+    host = None
+    port = None
+    if WEBUI_OVERRIDE_FILE.exists():
+        text = WEBUI_OVERRIDE_FILE.read_text()
+        for line in text.splitlines():
+            if "WEBUI_HOST=" in line:
+                host = line.split("WEBUI_HOST=")[-1].strip().strip('"')
+            if "WEBUI_PORT=" in line:
+                try: port = int(line.split("WEBUI_PORT=")[-1].split('"')[0].strip())
+                except Exception: pass
+    if not host:
+        host = primary_ip() or "0.0.0.0"
+    if port is None:
+        port = int(os.environ.get("WEBUI_PORT", "8080"))
+    print(f"http://{host}:{port}")
+    return 0
+
+def _web_bind_choices():
+    # dynamic first choice is always the current primary ip
+    cur = primary_ip() or "0.0.0.0"
+    return [
+        (f"{cur}:8080", (cur, 8080)),
+        ("127.0.0.1:8080", ("127.0.0.1", 8080)),
+        ("0.0.0.0:8080", ("0.0.0.0", 8080)),
+        ("127.0.0.1:8000", ("127.0.0.1", 8000)),
+        ("0.0.0.0:9090", ("0.0.0.0", 9090)),
+    ]
 
 # ======= IP =======
 def ip_text() -> str:
@@ -542,10 +811,39 @@ def ip_text() -> str:
                         ipline = parts[1]
                         break
         lines.append(f"{iface} ({state}): {ipline if ipline else 'no ip'}")
+    # Add an extra line indicating primary IP
+    prim = primary_ip()
+    if prim:
+        lines.append(f"primary: {prim}")
     return "\n".join(lines) if lines else "No interfaces"
 
 def ip_show(_args=None) -> int:
     print(ip_text())
+    return 0
+
+def ip_primary(_args=None) -> int:
+    ip = primary_ip()
+    if not ip: return 1
+    print(ip); return 0
+
+def ip_env(_args=None) -> int:
+    ip = primary_ip()
+    if not ip: return 1
+    print(f"export LHOST={ip}"); return 0
+
+def ip_json(_args=None) -> int:
+    print(json.dumps(ips_by_iface(), indent=2)); return 0
+
+# ======= Template render (for __HOST__) =======
+def template_render(path: str) -> int:
+    p = Path(path)
+    if not p.is_file():
+        print(f"File not found: {p}", file=sys.stderr); return 1
+    host = primary_ip()
+    if not host:
+        print("Could not resolve primary IP", file=sys.stderr); return 1
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    print(text.replace("__HOST__", host), end="")
     return 0
 
 # ======= Help screens =======
@@ -555,9 +853,10 @@ P4wnP1-O2 control CLI
 Subcommands:
   usb         USB gadget controls
   payload     Payload controls (list/set + start/stop/status/logs)
-  web         Web UI controls (port/host, start/stop, enable/disable)
+  web         Web UI controls (port/host, start/stop, enable/disable, url)
   service     Manage systemd units (install/uninstall/start/stop/...)
-  ip          Show IP addresses
+  ip          Show IPs (also: ip primary | ip env | ip json)
+  template    Render a text file replacing __HOST__ with device IP
   menu        Interactive menu (arrow keys)
 """)
 
@@ -599,7 +898,8 @@ Commands:
   web start | stop | restart
   web enable | disable
   web config show
-  web config set --host <ip> --port <n>
+  web config set --host <ip|auto> --port <n>
+  web url
 
 Notes:
   • Config writes systemd override at:
@@ -702,13 +1002,14 @@ def tui_menu(stdscr):
 
     web_sub = MenuState("Web UI", [
         MenuItem("Status", "status", status_fn=web_status_text),
-        MenuItem("Bind (host:port)", "selector", data={"choices": WEB_BIND_CHOICES}),
+        MenuItem("Bind (host:port)", "selector", data={"choices": _web_bind_choices()}),
         MenuItem("Start", "action", data={"fn": web_start}),
         MenuItem("Stop", "action", data={"fn": web_stop}),
         MenuItem("Restart", "action", data={"fn": web_restart}),
         MenuItem("Enable", "action", data={"fn": web_enable}),
         MenuItem("Disable", "action", data={"fn": web_disable}),
         MenuItem("Show override", "action", data={"fn": lambda: web_config_show(None)}),
+        MenuItem("Show URL", "action", data={"fn": web_url}),
     ])
 
     def mk_svc_actions(title, unit):
@@ -847,6 +1148,7 @@ def main() -> int:
         if sub == "restart": return web_restart()
         if sub == "enable":  return web_enable()
         if sub == "disable": return web_disable()
+        if sub == "url":     return web_url()
         if sub == "config":
             if len(sys.argv) == 3:
                 print(WEB_HELP.rstrip()); return 0
@@ -889,7 +1191,18 @@ def main() -> int:
 
     # ip
     if cmd == "ip":
+        sub = sys.argv[2].lower() if len(sys.argv) > 2 else "show"
+        if sub == "show":    return ip_show()
+        if sub == "primary": return ip_primary()
+        if sub == "env":     return ip_env()
+        if sub == "json":    return ip_json()
         return ip_show()
+
+    # template
+    if cmd == "template":
+        if len(sys.argv) >= 4 and sys.argv[2] == "render":
+            return template_render(sys.argv[3])
+        print("usage: p4wnctl template render <file>"); return 1
 
     # menu (with fallback)
     if cmd == "menu":
