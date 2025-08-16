@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>P4wnP1-O2</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="{{ url_for('static', filename='htmx.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='alpine.min.js') }}" defer></script>
+  </head>
+  <body x-data="{ live: null }">
+    <nav>
+      <a href="{{ url_for('dashboard') }}">Dashboard</a>
+      <a href="{{ url_for('usb') }}">USB</a>
+      <a href="{{ url_for('payloads') }}">Payloads</a>
+      <a href="{{ url_for('network') }}">Network</a>
+      <a href="{{ url_for('web') }}">Web UI</a>
+    </nav>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+    <script>
+      // SSE live updates on dashboard
+      if (window.location.pathname === "/") {
+        const es = new EventSource("/events");
+        es.onmessage = (e) => {
+          const d = JSON.parse(e.data);
+          const el = document.getElementById("live");
+          if (el) {
+            el.querySelector(".usb").textContent = d.usb;
+            el.querySelector(".payload").textContent = d.payload;
+            el.querySelector(".web").textContent = d.web;
+            el.querySelector(".ips").textContent = d.ip.join(" | ");
+          }
+        };
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Payloads</h1>
+<p><strong>Current:</strong> <span id="pl-cur">{{ current }}</span></p>
+<form hx-post="/payloads/set" hx-target="#pl-cur" hx-swap="outerHTML">
+  <select name="name">
+    {% for n in names %}
+      <option value="{{ n }}">{{ n }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Set</button>
+</form>
+{% endblock %}

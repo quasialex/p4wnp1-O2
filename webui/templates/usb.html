@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>USB Settings</h1>
+<p><strong>Status:</strong> <span id="usb-status">{{ usb }}</span></p>
+
+<form hx-post="/usb/set" hx-target="#usb-status" hx-swap="outerHTML">
+  <label><input type="radio" name="mode" value="hid_net_only"> HID + NET</label>
+  <label><input type="radio" name="mode" value="hid_storage_net"> HID + NET + MSD</label>
+  <label><input type="radio" name="mode" value="storage_only"> Storage Only</label>
+  <button type="submit">Apply</button>
+</form>
+{% endblock %}
