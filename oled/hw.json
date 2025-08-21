@@ -1,0 +1,1 @@
+{ "iface": "spi", "spi_port": 0, "spi_dev": 0, "spi_dc": 24, "spi_rst": 25 }

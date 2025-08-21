@@ -1,407 +1,461 @@
 #!/usr/bin/env python3
-# OLED joystick-first menu for P4wnP1-O2
-# - Up/Down: move
-# - Left: back (or cycle selector left)
-# - Right: enter submenu (or cycle selector right)
-# - Select: run action/script OR confirm selector
-#
-# Supports items:
-# { "name|title": "Text", "submenu": [...] }
-# { "name|title": "Run Thing", "action": "sudo /path/cmd", "confirm": false }
-# { "name|title": "Run Script", "script": "/path/to/script.sh", "confirm": true }
-# { "name|title": "USB Mode", "selector": {
-#      "choices": [{"label":"HID+NET","value":"hid_net_only"},
-#                  {"label":"HID+NET+MSD","value":"hid_storage_net"},
-#                  {"label":"Storage Only","value":"storage_only"}],
-#      "action_template": "sudo {P4WN_HOME}/p4wnctl.py usb set {value}"
-#   },
-#   "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status"
-# }
-# { "name|title": "Current USB", "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" }
-#
-# Upgrades in this version:
-# - Selector choices can be dynamic with "value_cmd" and/or "label_cmd"
-#   (e.g., compute host via p4wnctl: value_cmd="python3 /opt/p4wnp1/p4wnctl.py ip primary | xargs -I{} echo \"--host {} --port 8080\"")
-# - Backward compatible with static "value" / "label".
-# - Status rows still display the last non-empty line of the command output.
+# P4wnP1-O2 OLED menu — Waveshare 1.3" SPI SH1106 (hard-coded)
+# Rotation-aware controls:
+#   ROT=2 (180°):  KEY3=Select, KEY2=Back, KEY1=Rotate(long), KEY1 short = selector cycle
+#   ROT=0 (0°):    KEY1=Select, KEY2=Back, KEY3=Rotate(long), KEY3 short = selector cycle
+# Joystick: up/down only. **Flipped when ROT=0** so UP always feels like UP.
 
-import json
-import os
-import subprocess
-import time
+import json, subprocess, os, sys, time, traceback
+from pathlib import Path
 from textwrap import wrap
 
 import RPi.GPIO as GPIO
-from luma.core.error import DeviceNotFoundError
-from luma.core.interface.serial import i2c, spi
+from PIL import ImageFont
+from luma.core.interface.serial import spi
 from luma.core.render import canvas
 from luma.oled.device import sh1106, ssd1306
-from PIL import ImageFont
 
-# ========= Config =========
-P4WN_HOME = os.getenv("P4WN_HOME", "/opt/p4wnp1")
-MENU_CONFIG = os.path.join(P4WN_HOME, "oled/menu_config.json")
-LOG_DIR = os.path.join(P4WN_HOME, "logs/")
-FONT = ImageFont.load_default()
+# ---------- Paths / constants ----------
+P4WN_HOME    = os.getenv("P4WN_HOME", "/opt/p4wnp1")
+MENU_CONFIG  = Path(P4WN_HOME) / "oled" / "menu_config.json"
+ROT_FILE     = Path(P4WN_HOME) / "oled" / "rotation.json"
+LOG_DIR      = Path(P4WN_HOME) / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-TOAST_TIME = 2.0  # seconds to show run result
-DEBOUNCE = 0.12   # button debounce seconds
-LINE_W = 20       # chars per line (approx, for default font)
-STATUS_TIMEOUT = 2.0  # default timeout for status_cmd
+IDLE_TIMEOUT_S   = 10.0
+TOAST_TIME       = 2.0
+DEBOUNCE         = 0.12
+RELEASE_WAIT     = 0.40
+STATUS_TIMEOUT   = 2.0
+LONG_PRESS_S     = 2.0
 
-# ========= GPIO pins (BCM) =========
-UP_PIN = 6
-DOWN_PIN = 19
-LEFT_PIN = 5
-RIGHT_PIN = 26
-SELECT_PIN = 13
-# EXIT_PIN acts as an extra "Back"
-EXIT_PIN = 20
+# ---------- Waveshare 1.3" OLED (SPI, SH1106) ----------
+OLED_SPI_PORT = 0
+OLED_SPI_DEV  = 0
+OLED_SPI_DC   = 24
+OLED_SPI_RST  = 25
+OLED_CTRL     = "sh1106"    # sh1106 | ssd1306
 
+# ---------- Buttons (BCM) ----------
+# Joystick (5-way) — use only UP/DOWN
+JOY_UP, JOY_DOWN, JOY_LEFT, JOY_RIGHT, JOY_CENTER = 6, 19, 5, 26, 13
+# Right-side keys (adjust if your HAT revision differs)
+# Mapping is rotation-aware in read_event()
+KEY1, KEY2, KEY3 = 21, 20, 16
+
+GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
-for pin in (UP_PIN, DOWN_PIN, LEFT_PIN, RIGHT_PIN, SELECT_PIN, EXIT_PIN):
-    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+for p in (JOY_UP, JOY_DOWN, JOY_LEFT, JOY_RIGHT, JOY_CENTER, KEY1, KEY2, KEY3):
+    GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-# ========= OLED init =========
-try:
-    serial = i2c(port=1, address=0x3C)
-    device = sh1106(serial)
-except DeviceNotFoundError:
-    serial = spi(device=0, port=0)
-    device = ssd1306(serial)
-
-# ========= Helpers =========
-def token(s: str) -> str:
-    return s.replace("{P4WN_HOME}", P4WN_HOME)
-
-def shell(cmd: str, timeout: float | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(token(cmd), shell=True, capture_output=True, text=True, timeout=timeout)
-
-def show_lines(lines, hold: float = 0.0):
-    with canvas(device) as draw:
-        y = 0
-        for ln in lines[:5]:
-            draw.text((0, y), ln, font=FONT, fill=255)
-            y += 12
-    if hold > 0:
-        time.sleep(hold)
-
-def show_title_status_item(title: str, status: str, item_label: str | None):
-    lines = []
-    for w in wrap(title, LINE_W):
-        lines.append(w)
-    if status:
-        for w in wrap(status, LINE_W):
-            lines.append("· " + w)
-    if item_label:
-        lines.append("> " + item_label)
-    lines.append("↑↓ move ← back →/✓ select")
-    show_lines(lines)
-
-def read_status(cmd: str, timeout: float = STATUS_TIMEOUT) -> str:
+# ---------- OLED init / rotation ----------
+def _load_rotation():
     try:
-        res = shell(cmd, timeout=timeout)
-        text = (res.stdout + "\n" + res.stderr).strip()
-        if not text:
-            return ""
+        if ROT_FILE.exists():
+            return int(json.loads(ROT_FILE.read_text()).get("rotate", 2)) % 4
+    except Exception:
+        pass
+    return 2  # default 180°
+
+def _save_rotation(rot):
+    try:
+        ROT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ROT_FILE.write_text(json.dumps({"rotate": int(rot) % 4}))
+    except Exception:
+        pass
+
+def _make_device(rot):
+    serial = spi(port=OLED_SPI_PORT, device=OLED_SPI_DEV, gpio_DC=OLED_SPI_DC, gpio_RST=OLED_SPI_RST)
+    return (ssd1306 if OLED_CTRL == "ssd1306" else sh1106)(serial, rotate=rot)
+
+def _init_device():
+    try:
+        return _make_device(_load_rotation())
+    except Exception as e:
+        print(f"[!] OLED not available: {e}. Exiting without error.")
+        sys.exit(0)
+
+DEVICE = _init_device()
+
+# ---------- Font / layout (smaller if possible) ----------
+def _load_font():
+    # Try tiny monospace TTF for more columns; fallback to PIL bitmap
+    candidates = [
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 9),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 8),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9),
+    ]
+    for path, sz in candidates:
+        try:
+            f = ImageFont.truetype(path, sz)
+            try:
+                lh = f.getbbox("Ag")[3] - f.getbbox("Ag")[1]
+                cw = f.getbbox("M")[2] - f.getbbox("M")[0]
+            except Exception:
+                lh = f.getsize("Ag")[1]; cw = max(f.getsize("M")[0], 6)
+            return f, max(lh, 8), max(cw, 5)
+        except Exception:
+            pass
+    # Fallback bitmap font
+    f = ImageFont.load_default()
+    try:
+        lh = f.getbbox("Ag")[3] - f.getbbox("Ag")[1]
+        cw = f.getbbox("M")[2] - f.getbbox("M")[0]
+    except Exception:
+        lh = f.getsize("Ag")[1]; cw = max(f.getsize("M")[0], 6)
+    return f, max(lh, 8), max(cw, 6)
+
+FONT, LINE_H, CHAR_W = _load_font()
+def screen_cols(): return max(12, DEVICE.width // CHAR_W)
+def screen_rows(): return max(3,  DEVICE.height // LINE_H)
+
+# ---------- Shell helpers ----------
+def token(s: str) -> str: return s.replace("{P4WN_HOME}", P4WN_HOME)
+
+def shell(cmd: str, timeout: float|None=None):
+    env = os.environ.copy(); env["P4WN_HOME"]=P4WN_HOME
+    return subprocess.run(token(cmd), shell=True, capture_output=True, text=True,
+                          timeout=timeout, cwd=P4WN_HOME, env=env)
+
+def read_status(cmd: str, timeout: float=STATUS_TIMEOUT) -> str:
+    try:
+        r = shell(cmd, timeout=timeout)
+        text = (r.stdout + "\n" + r.stderr).strip()
         for ln in reversed(text.splitlines()):
-            ln = ln.strip()
-            if ln:
-                return ln
+            if ln.strip(): return ln.strip()
     except Exception:
         pass
     return ""
 
-def run_cmd(cmd: str, label="action"):
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log_file = os.path.join(LOG_DIR, f"{label}.log")
+def run_cmd_like(script_or_action: str, label="action"):
+    raw = token(script_or_action)
+    if os.path.isfile(raw):
+        if   raw.endswith(".py"): cmd = f"python3 {raw}"
+        elif raw.endswith(".sh"): cmd = f"bash {raw}"
+        else:                     cmd = raw
+    else:
+        cmd = raw
     try:
-        res = shell(cmd)
-        with open(log_file, "w") as f:
-            f.write(res.stdout + "\n" + res.stderr)
-        ok = (res.returncode == 0)
-        out = (res.stdout + res.stderr).strip().splitlines()
+        r = shell(cmd)
+        out = (r.stdout + r.stderr).strip().splitlines()
         tail = "\n".join(out[-2:]) if out else ""
+        ok = (r.returncode == 0)
+        (LOG_DIR / f"{label}.log").write_text(r.stdout + "\n" + r.stderr)
         msg = ("✓ OK" if ok else "✗ ERR") + (("\n" + tail) if tail else "")
         return ok, msg
     except Exception as e:
         return False, f"✗ ERR\n{e}"
 
-def debounce_wait():
-    time.sleep(DEBOUNCE)
+# ---------- Menu data helpers ----------
+def replace_tokens(obj):
+    if isinstance(obj, dict):  return {k: replace_tokens(v) for k,v in obj.items()}
+    if isinstance(obj, list):  return [replace_tokens(v) for v in obj]
+    if isinstance(obj, str):   return token(obj)
+    return obj
 
-def btn(name):
-    if name == 'up' and GPIO.input(UP_PIN) == GPIO.LOW: return True
-    if name == 'down' and GPIO.input(DOWN_PIN) == GPIO.LOW: return True
-    if name == 'left' and GPIO.input(LEFT_PIN) == GPIO.LOW: return True
-    if name == 'right' and GPIO.input(RIGHT_PIN) == GPIO.LOW: return True
-    if name == 'select' and GPIO.input(SELECT_PIN) == GPIO.LOW: return True
-    if name == 'exit' and GPIO.input(EXIT_PIN) == GPIO.LOW: return True
-    return False
-
-def wait_button():
-    while True:
-        for k in ('up','down','left','right','select','exit'):
-            if btn(k):
-                debounce_wait()
-                return k
-        time.sleep(0.03)
-
-# ========= Dynamic choice resolvers (NEW) =========
-def _strip_last(text: str) -> str:
-    text = text.strip()
-    if not text:
-        return ""
-    return text.splitlines()[-1].strip()
-
-def compute_choice_value(choice: dict) -> str:
-    """
-    Returns the value to be inserted into action_template.
-    Precedence:
-      1) value_cmd  -> run and take the last non-empty line
-      2) value      -> return as-is
-      else: ""
-    """
-    if "value_cmd" in choice and isinstance(choice["value_cmd"], str):
-        try:
-            res = shell(choice["value_cmd"], timeout=STATUS_TIMEOUT)
-            return _strip_last(res.stdout + "\n" + res.stderr)
-        except Exception:
-            return ""
-    return str(choice.get("value", "")).strip()
-
-def compute_choice_label(choice: dict) -> str:
-    """
-    Visible label for selector position.
-    Precedence:
-      1) label_cmd  -> run and take last non-empty line
-      2) label
-      3) value/value_cmd fallback (last line)
-    """
-    if "label_cmd" in choice and isinstance(choice["label_cmd"], str):
-        try:
-            res = shell(choice["label_cmd"], timeout=STATUS_TIMEOUT)
-            lab = _strip_last(res.stdout + "\n" + res.stderr)
-            if lab:
-                return lab
-        except Exception:
-            pass
-    if "label" in choice:
-        return str(choice["label"])
-    # fallback to value/value_cmd textual form
-    v = compute_choice_value(choice)
-    return v if v else "(empty)"
-
-# ========= Menu loading / validation =========
-def load_menu():
-    with open(MENU_CONFIG, "r") as f:
-        raw = json.load(f)
-    return replace_tokens(validate_items(raw))
-
-def replace_tokens(data):
-    if isinstance(data, dict):
-        return {k: replace_tokens(v) for k, v in data.items()}
-    if isinstance(data, list):
-        return [replace_tokens(v) for v in data]
-    if isinstance(data, str):
-        return token(data)
-    return data
-
-def title_of(item):
-    return item.get("name") or item.get("title") or "Item"
-
-def is_action(item):   return "action" in item or "script" in item
-def is_submenu(item):  return "submenu" in item
-def is_selector(item): return isinstance(item.get("selector"), dict)
-def is_status(item):   return "status_cmd" in item
+def title_of(it):   return it.get("name") or it.get("title") or "Item"
+def is_action(it):  return isinstance(it.get("action"), str)
+def is_script(it):  return isinstance(it.get("script"), str)
+def is_submenu(it): return isinstance(it.get("submenu"), list)
+def is_selector(it):return isinstance(it.get("selector"), dict)
+def is_status(it):  return isinstance(it.get("status_cmd"), str)
 
 def _valid_selector(sel: dict) -> bool:
-    # must have choices (list) and action_template
     ch = sel.get("choices")
-    if not isinstance(ch, list) or not sel.get("action_template"):
-        return False
-    # each choice must provide either value or value_cmd; label/label_cmd optional
+    if not isinstance(ch, list) or not sel.get("action_template"): return False
     for c in ch:
-        if not isinstance(c, dict):
-            return False
-        if not ("value" in c or "value_cmd" in c):
-            return False
+        if not isinstance(c, dict): return False
+        if not ("value" in c or "value_cmd" in c): return False
     return True
 
 def validate_items(items):
-    valid = []
+    v=[]
     for it in items:
-        if "submenu" in it and isinstance(it["submenu"], list):
-            valid.append(it); continue
-        if "action" in it and isinstance(it["action"], str):
-            valid.append(it); continue
-        if "script" in it and isinstance(it["script"], str) and os.path.exists(it["script"]):
-            valid.append(it); continue
-        if "selector" in it and isinstance(it["selector"], dict) and _valid_selector(it["selector"]):
-            valid.append(it); continue
-        if "status_cmd" in it and isinstance(it["status_cmd"], str):
-            valid.append(it); continue
-        if title_of(it).lower().startswith("← back"):
-            valid.append(it); continue
-    return valid
+        # Hide any "← Back" entries; we have a real Back key (KEY2)
+        if title_of(it).strip().startswith("←"): continue
+        if is_submenu(it) or is_action(it) or is_script(it) or is_status(it):
+            v.append(it); continue
+        if is_selector(it) and _valid_selector(it["selector"]):
+            v.append(it); continue
+    return v
 
-# ========= Core UI =========
-class MenuState:
-    def __init__(self, items, header="Menu"):
-        self.items = items
-        self.header = header
-        self.index = 0
-        self.selector_cursor = {}  # per-item selector index
-
-    def current(self):
-        if not self.items: return None
-        return self.items[self.index]
-
-    def move_up(self):
-        if self.items: self.index = (self.index - 1) % len(self.items)
-
-    def move_down(self):
-        if self.items: self.index = (self.index + 1) % len(self.items)
-
-    def selector_left(self, item):
-        sid = id(item)
-        cur = self.selector_cursor.get(sid, 0)
-        choices = item["selector"]["choices"]
-        cur = (cur - 1) % len(choices)
-        self.selector_cursor[sid] = cur
-
-    def selector_right(self, item):
-        sid = id(item)
-        cur = self.selector_cursor.get(sid, 0)
-        choices = item["selector"]["choices"]
-        cur = (cur + 1) % len(choices)
-        self.selector_cursor[sid] = cur
-
-    def selector_choice(self, item):
-        sid = id(item)
-        cur = self.selector_cursor.get(sid, 0)
-        return item["selector"]["choices"][cur]
-
-def render(state, status_line=""):
-    it = state.current()
-    if not it:
-        show_lines(["Empty menu"]); return
-    name = title_of(it)
-    # selector label (dynamic)
-    if is_selector(it):
-        sel = state.selector_choice(it)
-        label = f"{name}: {compute_choice_label(sel)}"
+def load_menu_items():
+    try:
+        data = json.loads(MENU_CONFIG.read_text())
+    except Exception:
+        print("[!] Failed to load menu_config.json", file=sys.stderr)
+        traceback.print_exc(); sys.exit(1)
+    if isinstance(data, list): items = data
+    elif isinstance(data, dict):
+        if   isinstance(data.get("menu"), list):    items = data["menu"]
+        elif isinstance(data.get("submenu"), list): items = data["submenu"]
+        else:
+            print("[!] menu_config.json must be list or dict with 'menu'/'submenu'", file=sys.stderr); sys.exit(1)
     else:
-        label = name
-    show_title_status_item(state.header, status_line, label)
+        print("[!] menu_config.json must be a list or dict", file=sys.stderr); sys.exit(1)
+    return validate_items(replace_tokens(items))
 
-def confirm_prompt(text="Confirm?"):
-    show_lines([text, "", "← No ✓ Yes"])
-    while True:
-        k = wait_button()
-        if k == 'left': return False
-        if k in ('select','right'): return True
+# ---------- Choice helpers ----------
+def _last(text: str) -> str:
+    text = (text or "").strip()
+    return text.splitlines()[-1].strip() if text else ""
 
-def exec_item(item):
-    # status-only rows: just refresh
-    if is_status(item):
-        return True, read_status(item["status_cmd"]) or "OK"
-
-    # selector: exec handled in main loop (we need current choice)
-    if is_selector(item):
-        return False, "selector"
-
-    # action/script
-    cmd = item.get("action") or ("bash " + item.get("script"))
-    if item.get("confirm", False):
-        if not confirm_prompt("Run?\n" + title_of(item)):
-            return False, "Cancelled"
-    ok, msg = run_cmd(cmd, label=title_of(item).replace(" ", "_"))
-    return ok, msg
-
-def menu_loop(root_items):
-    stack = [MenuState(root_items, header="P4wnP1-O2")]
-    last_mtime = os.path.getmtime(MENU_CONFIG)
-
-    while True:
-        # Hot reload
+def choice_value(c: dict) -> str:
+    if "value_cmd" in c:
         try:
-            mtime = os.path.getmtime(MENU_CONFIG)
-            if mtime != last_mtime:
-                last_mtime = mtime
-                stack = [MenuState(load_menu(), header="P4wnP1-O2")]
+            r = shell(c["value_cmd"], timeout=STATUS_TIMEOUT)
+            return _last(r.stdout + "\n" + r.stderr)
+        except Exception:
+            return ""
+    return str(c.get("value","")).strip()
+
+def choice_label(c: dict) -> str:
+    if "label_cmd" in c:
+        try:
+            r = shell(c["label_cmd"], timeout=STATUS_TIMEOUT)
+            lab = _last(r.stdout + "\n" + r.stderr)
+            if lab: return lab
+        except Exception:
+            pass
+    if "label" in c: return str(c["label"])
+    v = choice_value(c)
+    return v if v else "(empty)"
+
+# ---------- UI state ----------
+class MenuState:
+    def __init__(self, items):
+        self.items = items
+        self.index = 0
+        self.offset = 0
+        self.sel_cursor = {}
+
+    def rows(self): return screen_rows()
+    def current(self): return self.items[self.index] if self.items else None
+
+    def visible_slice(self):
+        rows = self.rows()
+        if self.index < self.offset: self.offset = self.index
+        if self.index >= self.offset + rows: self.offset = self.index - rows + 1
+        return self.items[self.offset:self.offset + rows]
+
+    def up(self):
+        if self.items:
+            self.index = (self.index - 1) % len(self.items)
+
+    def down(self):
+        if self.items:
+            self.index = (self.index + 1) % len(self.items)
+
+    def sel_pos(self, it): return self.sel_cursor.get(id(it), 0)
+    def sel_set(self, it, pos):
+        ch = it["selector"]["choices"]; self.sel_cursor[id(it)] = pos % len(ch)
+    def sel_next(self, it): self.sel_set(it, self.sel_pos(it) + 1)
+    def sel_choice(self, it):
+        ch = it["selector"]["choices"]; return ch[self.sel_pos(it) % len(ch)]
+
+# ---------- Drawing ----------
+def draw_text_lines(lines, hold=0.0):
+    cols = screen_cols()
+    wrapped=[]
+    for ln in lines:
+        wrapped += wrap(ln, cols) or [""]
+    with canvas(DEVICE) as draw:
+        y=0
+        for ln in wrapped[:screen_rows()]:
+            draw.text((0, y), ln, font=FONT, fill=255)
+            y += LINE_H
+    if hold>0: time.sleep(hold)
+
+def render_list(state: MenuState):
+    cols = screen_cols()
+    view = state.visible_slice()
+    lines = []
+    for i, it in enumerate(view, start=state.offset):
+        name = title_of(it)
+        if is_selector(it):
+            lab = choice_label(state.sel_choice(it))
+            name = f"{name}: {lab}"
+        prefix = "> " if i == state.index else "  "   # no dot on others
+        lines.append((prefix + name)[:cols*2])
+    draw_text_lines(lines)
+
+def toast(msg: str, ms: float = TOAST_TIME):
+    draw_text_lines(wrap(msg, screen_cols()), hold=ms)
+
+# ---------- Input (debounced, idle & saver, rotation-aware mapping) ----------
+_last_input = time.monotonic()
+_saver_on   = False
+
+def _low(pin): return GPIO.input(pin) == GPIO.LOW
+
+def _wait_release(pin, timeout=RELEASE_WAIT):
+    t0 = time.monotonic()
+    while _low(pin):
+        time.sleep(0.01)
+        if time.monotonic() - t0 > timeout: break
+
+def _wake_if_saver():
+    global _saver_on
+    if _saver_on:
+        try: DEVICE.show()
+        except Exception: pass
+        _saver_on = False
+
+def _maybe_saver():
+    global _saver_on
+    if (time.monotonic() - _last_input) >= IDLE_TIMEOUT_S and not _saver_on:
+        try: DEVICE.hide()
+        except Exception: pass
+        _saver_on = True
+
+def _toggle_rotate():  # toggle 0 <-> 2 only
+    cur = _load_rotation()
+    new_rot = 2 if cur != 2 else 0
+    _save_rotation(new_rot)
+    global DEVICE
+    try:
+        DEVICE = _make_device(new_rot)
+    except Exception as e:
+        print(f"[!] Re-init OLED failed after rotate: {e}")
+
+def read_event():
+    """Return one of: 'up','down','enter','back','sel-cycle','rotate', or None.
+       Mapping is based on current rotation (0 vs 2).
+       Joystick UP/DOWN are **flipped when ROT==0** so UI always feels consistent."""
+    global _last_input
+    rot = _load_rotation()
+
+    # Map side keys
+    if rot == 2:
+        # ROT=2: KEY3=Enter, KEY2=Back, KEY1=Rotate(long)/Cycle(short)
+        if _low(KEY1):
+            t0 = time.monotonic()
+            while _low(KEY1):
+                time.sleep(0.02)
+                if time.monotonic() - t0 >= LONG_PRESS_S:
+                    _wait_release(KEY1); _last_input=time.monotonic(); _wake_if_saver(); return 'rotate'
+            time.sleep(DEBOUNCE); _last_input=time.monotonic(); _wake_if_saver(); return 'sel-cycle'
+        if _low(KEY2):
+            time.sleep(DEBOUNCE); _wait_release(KEY2); _last_input=time.monotonic(); _wake_if_saver(); return 'back'
+        if _low(KEY3):
+            time.sleep(DEBOUNCE); _wait_release(KEY3); _last_input=time.monotonic(); _wake_if_saver(); return 'enter'
+    else:
+        # ROT=0: KEY1=Enter, KEY2=Back, KEY3=Rotate(long)/Cycle(short)
+        if _low(KEY3):
+            t0 = time.monotonic()
+            while _low(KEY3):
+                time.sleep(0.02)
+                if time.monotonic() - t0 >= LONG_PRESS_S:
+                    _wait_release(KEY3); _last_input=time.monotonic(); _wake_if_saver(); return 'rotate'
+            time.sleep(DEBOUNCE); _last_input=time.monotonic(); _wake_if_saver(); return 'sel-cycle'
+        if _low(KEY2):
+            time.sleep(DEBOUNCE); _wait_release(KEY2); _last_input=time.monotonic(); _wake_if_saver(); return 'back'
+        if _low(KEY1):
+            time.sleep(DEBOUNCE); _wait_release(KEY1); _last_input=time.monotonic(); _wake_if_saver(); return 'enter'
+
+    # Joystick up/down — **flip when ROT==0**
+    if _low(JOY_UP):
+        time.sleep(DEBOUNCE); _wait_release(JOY_UP); _last_input=time.monotonic(); _wake_if_saver()
+        return 'down' if rot == 0 else 'up'
+    if _low(JOY_DOWN):
+        time.sleep(DEBOUNCE); _wait_release(JOY_DOWN); _last_input=time.monotonic(); _wake_if_saver()
+        return 'up' if rot == 0 else 'down'
+
+    # ignore left/right/center
+    return None
+
+# ---------- Exec ----------
+def exec_item(it):
+    if is_status(it):
+        toast(read_status(it["status_cmd"]) or "OK"); return
+    label = title_of(it).replace(" ", "_")
+    if is_action(it):
+        toast(run_cmd_like(it["action"], label)[1]); return
+    if is_script(it):
+        path = token(it["script"])
+        if not os.path.exists(path) and not path.endswith((".py",".sh")):
+            toast(run_cmd_like(path, label)[1]); return
+        toast(run_cmd_like(path, label)[1]); return
+    toast("Unknown item")
+
+# ---------- Main ----------
+def main():
+    root = load_menu_items()
+    stack = [MenuState(root)]
+    try:
+        last_mtime = MENU_CONFIG.stat().st_mtime
+    except Exception:
+        last_mtime = 0
+
+    render_list(stack[-1])
+
+    while True:
+        _maybe_saver()
+
+        # hot-reload at root
+        try:
+            mt = MENU_CONFIG.stat().st_mtime
+            if mt != last_mtime:
+                last_mtime = mt
+                stack[0] = MenuState(load_menu_items())
+                if len(stack) == 1:
+                    render_list(stack[-1])
         except Exception:
             pass
 
-        state = stack[-1]
-        cur = state.current()
+        ev = read_event()
+        if ev is None:
+            time.sleep(0.03)
+            continue
 
-        # compute a status line if item has one
-        status_line = ""
-        if cur and is_status(cur):
-            status_line = read_status(cur["status_cmd"])
-        elif cur and is_selector(cur) and cur.get("status_cmd"):
-            status_line = read_status(cur["status_cmd"])
+        st = stack[-1]
+        cur = st.current()
 
-        render(state, status_line=status_line)
-        k = wait_button()
+        if ev == 'rotate':
+            _toggle_rotate()
+            toast(f"Rotate={_load_rotation()}")
+            render_list(st)
+            continue
 
-        # EXIT or Left (back)
-        if k == 'exit' or (k == 'left' and not is_selector(cur)):
+        if ev == 'up':   st.up();   render_list(st); continue
+        if ev == 'down': st.down(); render_list(st); continue
+
+        if ev == 'back':
             if len(stack) > 1:
                 stack.pop()
+                render_list(stack[-1])
+            else:
+                toast("Top menu")
+                render_list(st)
             continue
 
-        if k == 'up':
-            state.move_up(); continue
-        if k == 'down':
-            state.move_down(); continue
-        if cur is None:
+        if ev == 'sel-cycle':
+            if cur and is_selector(cur):
+                st.sel_next(cur); render_list(st)
+            else:
+                toast("Hold to rotate"); render_list(st)
             continue
 
-        if is_selector(cur):
-            if k == 'left':
-                state.selector_left(cur); continue
-            if k == 'right':
-                state.selector_right(cur); continue
-            if k == 'select':
-                choice = state.selector_choice(cur)
-                # compute dynamic value & label (NEW)
-                value = compute_choice_value(choice)
-                disp_label = compute_choice_label(choice)
-                tmpl = cur["selector"]["action_template"]
-                cmd = tmpl.replace("{value}", str(value)).replace("{P4WN_HOME}", P4WN_HOME)
-                label = f"{title_of(cur)}: {disp_label}"
-                ok, msg = run_cmd(cmd, label=label.replace(" ", "_"))
-                show_lines([label] + wrap(msg, LINE_W)[:4], hold=TOAST_TIME)
-                continue
+        if ev == 'enter':
+            if not cur: continue
+            if is_selector(cur):
+                ch   = st.sel_choice(cur)
+                val  = choice_value(ch)
+                disp = choice_label(ch)
+                cmd  = cur["selector"]["action_template"].replace("{value}", str(val)).replace("{P4WN_HOME}", P4WN_HOME)
+                toast(run_cmd_like(cmd, label=f"{title_of(cur)}_{disp}".replace(" ","_"))[1])
+                render_list(st); continue
+            if is_submenu(cur):
+                sub = validate_items(cur["submenu"])
+                stack.append(MenuState(sub))
+                render_list(stack[-1]); continue
+            exec_item(cur); render_list(st); continue
 
-        if is_submenu(cur):
-            header = title_of(cur)
-            items = validate_items(cur["submenu"])
-            stack.append(MenuState(items, header=header))
-            continue
-
-        if is_action(cur):
-            ok, msg = exec_item(cur)
-            label = title_of(cur)
-            show_lines([label] + wrap(msg, LINE_W)[:4], hold=TOAST_TIME)
-            continue
-
-        if is_status(cur) and k in ('select','right'):
-            status_line = read_status(cur["status_cmd"])
-            show_lines([title_of(cur)] + wrap(status_line or "OK", LINE_W)[:4], hold=TOAST_TIME)
-            continue
-
-# ========= main =========
-def main():
+if __name__ == "__main__":
     try:
-        root = load_menu()
-        menu_loop(root)
+        main()
     except KeyboardInterrupt:
         pass
     finally:
-        GPIO.cleanup()
-
-if __name__ == "__main__":
-    main()
+        try: GPIO.cleanup()
+        except Exception: pass

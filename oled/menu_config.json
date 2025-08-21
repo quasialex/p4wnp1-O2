@@ -121,7 +121,7 @@
     ]
   },
   {
-    "name": "Mass Storage Injector",
+    "name": "Mass Storage",
     "script": "{P4WN_HOME}/payloads/mass_storage.py"
   },
   {

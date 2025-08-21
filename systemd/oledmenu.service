@@ -1,3 +1,4 @@
+# /etc/systemd/system/oledmenu.service
 [Unit]
 Description=OLED Menu Launcher
 After=network-online.target
@@ -9,10 +10,8 @@ ExecStart=/usr/bin/env python3 /opt/p4wnp1/oled/oled_menu.py
 WorkingDirectory=/opt/p4wnp1/oled
 StandardOutput=journal
 StandardError=journal
-Restart=always
+Restart=on-failure
 RestartSec=3
-StartLimitBurst=3
-StartLimitIntervalSec=60
 
 [Install]
 WantedBy=multi-user.target

@@ -1,5 +1,6 @@
 # /opt/p4wnp1/webui/app.py
 import os
+from functools import wraps
 from flask import request, abort
 from flask import Flask, render_template, request, jsonify
 from sse import stream
@@ -9,14 +10,21 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 
 HOST = os.getenv("WEBUI_HOST", "127.0.0.1")
 PORT = int(os.getenv("WEBUI_PORT", "8080"))
-TOKEN = os.getenv("WEBUI_TOKEN", "")
+WEBUI_TOKEN = os.getenv("WEBUI_TOKEN")
 
 @app.before_request
 def require_token():
-    # If no token is configured, allow all (explicit choice)
+    """
+    If WEBUI_TOKEN is set, require either:
+      - Header: X-P4WN-Token: <token>
+      - OR query string: ?token=<token>
+    If not set, auth is disabled (open).
+    """
     if not WEBUI_TOKEN:
-        return
-    if request.headers.get("X-P4WN-Token") != WEBUI_TOKEN:
+        return  # no auth
+
+    tok = request.headers.get("X-P4WN-Token") or request.args.get("token")
+    if tok != WEBUI_TOKEN:
         abort(401)
 
 @app.get("/")
