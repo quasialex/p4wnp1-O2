@@ -6,6 +6,7 @@
 # Joystick: up/down only. **Flipped when ROT=0** so UP always feels like UP.
 
 import json, subprocess, os, sys, time, traceback
+import shlex, signal
 from pathlib import Path
 from textwrap import wrap
 
@@ -117,15 +118,14 @@ def shell(cmd: str, timeout: float|None=None):
     return subprocess.run(token(cmd), shell=True, capture_output=True, text=True,
                           timeout=timeout, cwd=P4WN_HOME, env=env)
 
-def read_status(cmd: str, timeout: float=STATUS_TIMEOUT) -> str:
+def read_status_lines(cmd: str, timeout: float = STATUS_TIMEOUT) -> list[str]:
     try:
         r = shell(cmd, timeout=timeout)
-        text = (r.stdout + "\n" + r.stderr).strip()
-        for ln in reversed(text.splitlines()):
-            if ln.strip(): return ln.strip()
+        text = (r.stdout + "\n" + r.stderr).strip("\n")
+        lines = [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+        return lines if lines else ["(no output)"]
     except Exception:
-        pass
-    return ""
+        return ["(error)"]
 
 def run_cmd_like(script_or_action: str, label="action"):
     raw = token(script_or_action)
@@ -145,6 +145,32 @@ def run_cmd_like(script_or_action: str, label="action"):
         return ok, msg
     except Exception as e:
         return False, f"✗ ERR\n{e}"
+
+import shlex, signal
+
+def run_cmd_bg(cmd: str, label: str = "bg"):
+    """
+    Detach a long-running command (listener/daemon) so the OLED menu doesn't block.
+    Stdout/err go to logs/<label>.log.
+    """
+    raw = token(cmd)
+    logf = (LOG_DIR / f"{label}.log").open("ab", buffering=0)
+    try:
+        # Prefer systemd-run (if available) so scope is tracked by systemd
+        if shutil.which("systemd-run"):
+            # --collect cleans the transient unit after exit
+            unit = f"p4wnp1-{label}".replace("/", "_")
+            scmd = f'systemd-run --unit={unit} --collect --property=StandardOutput=append:{logf.name} ' \
+                   f'--property=StandardError=append:{logf.name} -- {raw}'
+            subprocess.Popen(scmd, shell=True, cwd=P4WN_HOME)
+        else:
+            # Fallback: double-fork via setsid
+            subprocess.Popen(raw, shell=True, cwd=P4WN_HOME,
+                             stdout=logf, stderr=logf,
+                             preexec_fn=os.setsid, start_new_session=True)
+        return True, f"Started in background: {raw}"
+    except Exception as e:
+        return False, f"✗ BG start failed: {e}"
 
 # ---------- Menu data helpers ----------
 def replace_tokens(obj):
@@ -266,7 +292,7 @@ def draw_text_lines(lines, hold=0.0):
             y += LINE_H
     if hold>0: time.sleep(hold)
 
-def render_list(state: MenuState):
+def render_list(state: "MenuState"):
     cols = screen_cols()
     view = state.visible_slice()
     lines = []
@@ -278,6 +304,38 @@ def render_list(state: MenuState):
         prefix = "> " if i == state.index else "  "   # no dot on others
         lines.append((prefix + name)[:cols*2])
     draw_text_lines(lines)
+
+# ----- Detail view (for status outputs after Select) -----
+_detail = None  # dict with {'title': str, 'raw_lines': list[str], 'offset': int}
+
+def detail_open(title: str, raw_lines: list[str]):
+    global _detail
+    _detail = {"title": title, "raw_lines": raw_lines, "offset": 0}
+
+def detail_close():
+    global _detail
+    _detail = None
+
+def detail_active() -> bool:
+    return _detail is not None
+
+def render_detail():
+    cols = screen_cols()
+    rows = screen_rows()
+    head = "> " + _detail["title"]
+    # wrap body lines fresh each draw (adapts to rotation/font changes)
+    body_wrapped = []
+    for ln in _detail["raw_lines"]:
+        body_wrapped += wrap(ln, cols) or [""]
+    max_body_rows = max(0, rows - 1)
+    max_off = max(0, len(body_wrapped) - max_body_rows)
+    off = max(0, min(_detail["offset"], max_off))
+
+    page = [head] + body_wrapped[off: off + max_body_rows]
+    draw_text_lines(page)
+
+    # clamp stored offset
+    _detail["offset"] = off
 
 def toast(msg: str, ms: float = TOAST_TIME):
     draw_text_lines(wrap(msg, screen_cols()), hold=ms)
@@ -366,17 +424,39 @@ def read_event():
 
 # ---------- Exec ----------
 def exec_item(it):
+    # Status items open a scrollable detail view (only on Select)
     if is_status(it):
-        toast(read_status(it["status_cmd"]) or "OK"); return
+        lines = read_status_lines(it["status_cmd"])
+        detail_open(title_of(it), lines)
+        render_detail()
+        return
+
     label = title_of(it).replace(" ", "_")
-    if is_action(it):
-        toast(run_cmd_like(it["action"], label)[1]); return
-    if is_script(it):
-        path = token(it["script"])
-        if not os.path.exists(path) and not path.endswith((".py",".sh")):
-            toast(run_cmd_like(path, label)[1]); return
-        toast(run_cmd_like(path, label)[1]); return
-    toast("Unknown item")
+    bg = bool(it.get("background"))
+
+    # Choose the resolver used by both "action" and "script"
+    def _resolve_cmd():
+        if is_action(it):
+            return it["action"]
+        if is_script(it):
+            path = token(it["script"])
+            # If script path isn't a file, treat it as a shell command
+            if os.path.isfile(path):
+                if   path.endswith(".py"): return f"python3 {path}"
+                if   path.endswith(".sh"): return f"bash {path}"
+            return path
+        return None
+
+    cmd = _resolve_cmd()
+    if not cmd:
+        toast("Unknown item"); return
+
+    if bg:
+        ok, msg = run_cmd_bg(cmd, label)
+        toast(msg)
+    else:
+        ok, msg = run_cmd_like(cmd, label)
+        toast(msg)
 
 # ---------- Main ----------
 def main():
@@ -392,10 +472,10 @@ def main():
     while True:
         _maybe_saver()
 
-        # hot-reload at root
+        # hot-reload at root when NOT in detail view
         try:
             mt = MENU_CONFIG.stat().st_mtime
-            if mt != last_mtime:
+            if mt != last_mtime and not detail_active():
                 last_mtime = mt
                 stack[0] = MenuState(load_menu_items())
                 if len(stack) == 1:
@@ -408,6 +488,32 @@ def main():
             time.sleep(0.03)
             continue
 
+        if detail_active():
+            # In detail view: up/down scroll, back exits, rotate re-render
+            if ev == 'rotate':
+                _toggle_rotate(); render_detail(); continue
+            if ev == 'back':
+                detail_close(); render_list(stack[-1]); continue
+            if ev == 'up' or ev == 'down':
+                # recompute wrapped length to know bounds
+                cols = screen_cols(); rows = screen_rows()
+                body_wrapped=[]
+                for ln in _detail["raw_lines"]:
+                    body_wrapped += wrap(ln, cols) or [""]
+                max_body_rows = max(0, rows - 1)
+                max_off = max(0, len(body_wrapped) - max_body_rows)
+                if ev == 'up':
+                    _detail["offset"] = max(0, _detail["offset"] - 1)
+                else:
+                    _detail["offset"] = min(max_off, _detail["offset"] + 1)
+                render_detail(); continue
+            if ev in ('enter','sel-cycle'):
+                # ignore selects while in detail view
+                render_detail(); continue
+            # anything else: continue loop
+            continue
+
+        # Normal list navigation
         st = stack[-1]
         cur = st.current()
 
@@ -449,7 +555,10 @@ def main():
                 sub = validate_items(cur["submenu"])
                 stack.append(MenuState(sub))
                 render_list(stack[-1]); continue
-            exec_item(cur); render_list(st); continue
+            exec_item(cur);  # may open detail view or run action/script
+            if not detail_active():
+                render_list(st)
+            continue
 
 if __name__ == "__main__":
     try:

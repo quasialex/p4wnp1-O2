@@ -6,7 +6,6 @@
       { "name": "Payload:",     "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
       { "name": "Web UI:",      "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
       { "name": "IP:",          "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" },
-      { "name": "Primary IP:",  "status_cmd": "{P4WN_HOME}/p4wnctl.py ip primary" },
       { "name": "← Back" }
     ]
   },
@@ -105,8 +104,9 @@
   {
     "name": "Listeners",
     "submenu": [
-      { "name": "Reverse Shell Listener", "script": "{P4WN_HOME}/payloads/listeners/revshell_listener.py" },
       { "name": "HID Backdoor Listener",  "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.py" },
+      { "name": "Reverse Shell: Start 4444", "script": "{P4WN_HOME}/payloads/listeners/reverse_shell_listener.py", "background": true },
+      { "name": "Reverse Shell: Stop", "action": "bash -lc \"tmux kill-session -t p4wnp1_rshell || systemctl stop p4wnp1-rshell || pkill -f 'nc -lvnp 4444'\"", "background": true },
       { "name": "← Back" }
     ]
   },

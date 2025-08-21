@@ -5,7 +5,6 @@ import sys
 import json
 import curses
 import socket
-import ipaddress
 import subprocess
 from pathlib import Path
 from textwrap import dedent
@@ -167,6 +166,30 @@ def svc_status_text(unit: str) -> str:
     return f"{unit}: {active} ({enabled})"
 
 # ======= USB (Python gadget builder, no .sh) =======
+def usb_unbind_all():
+    """Unbind any configfs gadgets so UDC is free."""
+    base = Path("/sys/kernel/config/usb_gadget")
+    for g in base.iterdir():
+        if not g.is_dir(): continue
+        udc = g / "UDC"
+        if udc.exists():
+            try: udc.write_text("")
+            except Exception: pass
+
+def usb_unload_legacy():
+    """Unload monolithic gadget modules which conflict with configfs."""
+    for mod in ["g_hid","g_ether","g_serial","g_mass_storage","g_multi","g_acm"]:
+        sh(f"rmmod {mod}", check=False)
+
+def usb_force_reset():
+    """Free the controller before applying a new mode."""
+    need_root()
+    usb_preflight()
+    # stop getty on USB-serial if present
+    systemctl("stop", "serial-getty@ttyGS0.service")
+    usb_unbind_all()
+    usb_unload_legacy()
+
 def usb_preflight():
     sh("modprobe configfs || true", check=False)
     sh("mount -t configfs none /sys/kernel/config || true", check=False)
@@ -415,87 +438,116 @@ def usb_status(_args=None) -> int:
     print(usb_status_text()); return 0
 
 def usb_set(mode: str) -> int:
-    # REPLACED: no bash; pure Python gadget configuration
-    return usb_apply_mode(mode)
+    """
+    Apply gadget mode using the internal Python builder.
+    Modes:
+      - hid_net_only
+      - hid_storage_net
+      - storage_only
+    """
+    need_root()
+    usb_preflight()
 
-USB_CHOICES = [
-    ("HID + NET", "hid_net_only"),
-    ("HID + NET + MSD", "hid_storage_net"),
-    ("Storage Only", "storage_only")
-]
+    # Free the controller & remove any legacy/monolithic gadgets first
+    usb_force_reset()   # unbind & rmmod conflicting g_* modules
+    usb_teardown()      # remove old functions/links under /sys/kernel/config/usb_gadget/p4wnp1
 
-# ======= Payload discovery / manifests (unchanged logic) =======
-def _manifest_paths():
-    paths = []
+    # Build and bind the requested mode
+    rc = usb_apply_mode(mode)
+    if rc != 0:
+        return rc
+
+    # Post-check & helpful status
+    try:
+        udc = (USB_GADGET / "UDC").read_text().strip()
+        if not udc:
+            print("[!] Gadget not bound to any UDC (still empty).", file=sys.stderr)
+    except Exception:
+        pass
+
+    print(usb_status_text())
+    return 0
+
+# ======= Payload discovery / manifests (JSON+YAML) =======
+# Optional YAML support
+try:
+    import yaml  # pip install pyyaml
+except Exception:
+    yaml = None
+
+def _manifest_files():
+    files = []
     for d in PAYLOAD_MANIFEST_DIRS:
         if d.exists():
-            paths += sorted(d.glob("*.json"))
-    return paths
+            files += sorted(list(d.glob("*.json")) + list(d.glob("*.yml")) + list(d.glob("*.yaml")))
+    return files
 
-def load_manifests():
+def _read_manifest(path: Path) -> dict | None:
+    try:
+        text = path.read_text()
+        suf = path.suffix.lower()
+        if suf == ".json":
+            return json.loads(text)
+        if suf in (".yml", ".yaml") and yaml:
+            return yaml.safe_load(text)
+    except Exception:
+        return None
+    return None
+
+def load_manifests() -> dict[str, dict]:
     """
     Manifest fields (choose ONE of 'cmd' | 'bin' | 'script'):
       name:         str (required)
-      cmd:          str (shell string, runs under bash -lc; env expands)
-      bin:          str (program to exec)
-      args:         list[str] (optional; used with 'bin' or 'script')
-      script:       str (path to a Python file under /opt/p4wnp1/payloads/**)
-      env:          {k: v} (optional)
-      working_dir:  str (optional)
-      harden:       bool (default True)
-      preflight:    list[str] shell commands (optional; fail fast if any nonzero)
+      summary:      str
+      group:        str
+      usage:        [str, ...]
+      requirements: [str, ...]
+      risks:        [str, ...]
+      estimated_runtime: "..."
+      cmd | bin | script + args/env/working_dir/harden/preflight  (same as before)
     """
     out = {}
-    for p in _manifest_paths():
-        try:
-            data = json.loads(p.read_text())
-            name = str(data.get("name", "")).strip()
-            if not name:
-                continue
-            if "script" in data and data["script"]:
-                sp = Path(data["script"])
-                if not sp.is_absolute():
-                    sp = (P4WN_HOME / sp).resolve()
-                data["script"] = str(sp)
-            out[name] = data
-        except Exception:
+    for p in _manifest_files():
+        m = _read_manifest(p)
+        if not isinstance(m, dict): 
             continue
+        name = str(m.get("name", "")).strip() or p.stem
+        if "script" in m and m["script"]:
+            sp = Path(m["script"])
+            if not sp.is_absolute():
+                sp = (P4WN_HOME / sp).resolve()
+            m["script"] = str(sp)
+        m["_manifest_path"] = str(p)
+        out[name] = m
     return out
 
 def find_python_script(name: str) -> Path | None:
     candidates = []
     for r in PAYLOAD_DIRS:
         candidates.append(r / f"{name}.py")
-        candidates.append(r / "hid" / f"{name}.py")
-        candidates.append(r / "network" / f"{name}.py")
-        candidates.append(r / "listeners" / f"{name}.py")
-        candidates.append(r / "shell" / f"{name}.py")
+        for cat in ("hid","network","listeners","shell"):
+            candidates.append(r / cat / f"{name}.py")
     for c in candidates:
         if c.exists():
             return c
     return None
 
 def list_payload_names() -> list[str]:
-    names = set()
-    names.update(load_manifests().keys())
+    names = set(load_manifests().keys())
     for r in PAYLOAD_DIRS:
         if not r.exists(): continue
-        for p in r.glob("*.py"):
-            names.add(p.stem)
+        for p in r.glob("*.py"): names.add(p.stem)
         for cat in ("hid","network","listeners","shell"):
             d = r / cat
             if d.exists():
-                for p in d.glob("*.py"):
-                    names.add(p.stem)
-    # legacy .sh discovery retained (if someone has local ones)
+                for p in d.glob("*.py"): names.add(p.stem)
     for r in PAYLOAD_DIRS:
         if not r.exists(): continue
         for p in r.glob("*.sh"): names.add(p.stem)
         for cat in ("hid","network","listeners","shell"):
             d = r / cat
             if d.exists():
-                for p in d.glob("*.sh"):
-                    names.add(p.stem)
+                for p in d.glob("*.sh"): names.add(p.stem)
     return sorted(names)
 
 def transient_unit_name(name: str) -> str:
@@ -548,7 +600,7 @@ def payload_start(name: str) -> int:
             script = str(sp)
         else:
             print(f"No manifest or Python payload found for '{name}'. "
-                  f"Add payloads/manifests/{name}.json or {name}.py.", file=sys.stderr)
+                  f"Add payloads/manifests/{name}.json|.yml or {name}.py.", file=sys.stderr)
             return 1
 
     # Always inject P4WN_LHOST (dynamic)
@@ -656,12 +708,18 @@ def payload_status_text() -> str:
 def payload_status(_args=None) -> int:
     print(payload_status_text()); return 0
 
-def payload_list(_args=None) -> int:
+def payload_list(group: str | None = None) -> int:
+    mans = load_manifests()
     names = list_payload_names()
-    if names:
-        for n in names: print(n)
-    else:
-        print("(no payloads found)")
+    if not names:
+        print("(no payloads found)"); return 0
+    for n in names:
+        m = mans.get(n)
+        g = (m or {}).get("group")
+        if group and g != group: 
+            continue
+        summ = (m or {}).get("summary", "")
+        print(n if not summ else f"{n} - {summ}")
     return 0
 
 def payload_set(name: str) -> int:
@@ -672,6 +730,30 @@ def payload_set(name: str) -> int:
     ACTIVE_PAYLOAD_FILE.parent.mkdir(parents=True, exist_ok=True)
     ACTIVE_PAYLOAD_FILE.write_text(str(p))
     print(f"Active payload set: {p.stem}")
+    return 0
+
+def payload_describe(name: str) -> int:
+    m = load_manifests().get(name)
+    if not m:
+        print(f"(no manifest for '{name}')"); return 1
+    print(f"{m.get('name', name)}")
+    if m.get("group"): print(f"Group: {m['group']}")
+    if m.get("summary"): print(f"\nSummary:\n  {m['summary']}")
+    if m.get("usage"):
+        print("\nUsage:")
+        for u in m["usage"]:
+            print(f"  - {u}")
+    if m.get("requirements"):
+        print("\nRequirements:")
+        for r in m["requirements"]:
+            print(f"  - {r}")
+    if m.get("risks"):
+        print("\nOpSec / Risks:")
+        for r in m["risks"]:
+            print(f"  - {r}")
+    if m.get("estimated_runtime"):
+        print(f"\nEstimated runtime: {m['estimated_runtime']}")
+    print(f"\nManifest: {m.get('_manifest_path','(unknown)')}")
     return 0
 
 def get_payload_choices():
@@ -852,7 +934,7 @@ P4wnP1-O2 control CLI
 
 Subcommands:
   usb         USB gadget controls
-  payload     Payload controls (list/set + start/stop/status/logs)
+  payload     Payload controls (list/set + start/stop/status/logs/describe)
   web         Web UI controls (port/host, start/stop, enable/disable, url)
   service     Manage systemd units (install/uninstall/start/stop/...)
   ip          Show IPs (also: ip primary | ip env | ip json)
@@ -880,9 +962,10 @@ Commands:
   payload start <name>       # runs using manifest (cmd|bin|script)
   payload stop <name>
   payload logs <name>
+  payload describe <name>    # explain payload (from manifest .json/.yml)
 
 Manifests:
-  payloads/manifests/<name>.json — choose ONE of:
+  payloads/manifests/<name>.json or .yml — choose ONE of:
     { "name": "foo", "cmd":  "<shell string with ${ENV} if you like>" }
     { "name": "foo", "bin":  "program", "args": ["--flags","..."] }
     { "name": "foo", "script":"payloads/path/to/foo.py", "args": [] }
@@ -998,6 +1081,7 @@ def tui_menu(stdscr):
         MenuItem("Status (all)", "action", data={"fn": lambda: payload_status_all()}),
         *[MenuItem(f"Start: {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_start(v))[1])}) for lab, val in payload_choices[:5]],
         *[MenuItem(f"Stop:  {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_stop(v))[1])}) for lab, val in payload_choices[:5]],
+        # Tip: a future "Describe selected" could show manifest summary of the current selection
     ])
 
     web_sub = MenuState("Web UI", [
@@ -1091,7 +1175,7 @@ def tui_menu(stdscr):
         elif k in (ord('q'),):
             return
 
-# ======= CLI parsing / behavior =======
+# ======= CLI parsing / behavior (no argparse; OLED-friendly) =======
 def main() -> int:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
         print(MAIN_HELP.rstrip()); return 0
@@ -1134,6 +1218,9 @@ def main() -> int:
         if sub == "logs":
             if len(sys.argv) < 4: print("usage: p4wnctl payload logs <name>"); return 1
             return payload_logs(sys.argv[3])
+        if sub == "describe":
+            if len(sys.argv) < 4: print("usage: p4wnctl payload describe <name>"); return 1
+            return payload_describe(sys.argv[3])
 
         print(PAYLOAD_HELP.rstrip()); return 1
 

@@ -1,52 +1,63 @@
-#!/bin/bash
-# /opt/p4wnp1/config/usb_gadgets/storage_only.sh
+#!/usr/bin/env bash
 set -euo pipefail
 
 G=/sys/kernel/config/usb_gadget/p4wnp1
+UDCS=/sys/class/udc
+P4WN_HOME=${P4WN_HOME:-/opt/p4wnp1}
+MS_IMG="${P4WN_HOME}/usb_mass_storage.img"
 
-SERIAL=${SERIAL:-"1337"}
-MANUF=${MANUF:-"quasialex"}
-PRODUCT=${PRODUCT:-"P4wnP1-O2 MSD"}
-ID_VENDOR=${ID_VENDOR:-0x1d6b}
-ID_PRODUCT=${ID_PRODUCT:-0x0104}
-BCD_DEV=${BCD_DEV:-0x0100}
-BCD_USB=${BCD_USB:-0x0200}
-BACKING_IMG=${BACKING_IMG:-/opt/p4wnp1/usb_mass_storage.img}
+modprobe libcomposite || true
+modprobe dwc2 || true
 
-# clean slate
-[[ -d "$G" ]] && rm -rf "$G"
 mkdir -p "$G"
-cd "$G"
+[[ -w "$G/UDC" ]] && echo "" > "$G/UDC" || true
 
-echo "$ID_VENDOR"  > idVendor
-echo "$ID_PRODUCT" > idProduct
-echo "$BCD_DEV"    > bcdDevice
-echo "$BCD_USB"    > bcdUSB
+unlink_all() {
+  if [[ -d "$G/configs/c.1" ]]; then
+    find "$G/configs/c.1" -maxdepth 1 -type l -print -exec unlink {} \; || true
+  fi
+}
+rmdir_if() { [[ -d "$1" ]] && rmdir "$1" 2>/dev/null || true; }
 
-mkdir -p strings/0x409
-echo "$SERIAL"  > strings/0x409/serialnumber
-echo "$MANUF"   > strings/0x409/manufacturer
-echo "$PRODUCT" > strings/0x409/product
+unlink_all
+for f in hid.usb0 ecm.usb0 rndis.usb0; do
+  rmdir_if "$G/functions/$f" || true
+done
+rmdir_if "$G/functions/mass_storage.usb0" || true
 
-mkdir -p configs/c.1/strings/0x409
-echo "Mass Storage" > configs/c.1/strings/0x409/configuration
-echo 120 > configs/c.1/MaxPower
+# Descriptors / strings
+echo 0x1d6b > "$G/idVendor"
+echo 0x0104 > "$G/idProduct"
+echo 0x0200 > "$G/bcdUSB"
+echo 0x0100 > "$G/bcdDevice"
+echo 0x00   > "$G/bDeviceClass"
+echo 0x00   > "$G/bDeviceSubClass"
+echo 0x00   > "$G/bDeviceProtocol"
 
-mkdir -p functions/mass_storage.usb0
-echo 1 > functions/mass_storage.usb0/stall
-echo 1 > functions/mass_storage.usb0/removable
-echo 0 > functions/mass_storage.usb0/ro
+mkdir -p "$G/strings/0x409"
+echo "P4wnP1-O2"                           > "$G/strings/0x409/manufacturer"
+echo "P4wnP1-O2 Mass Storage"              > "$G/strings/0x409/product"
+echo "$(cat /proc/sys/kernel/random/uuid)" > "$G/strings/0x409/serialnumber"
 
-if [[ ! -f "$BACKING_IMG" ]]; then
-  echo "[p4wnp1] WARNING: $BACKING_IMG not found; creating 128MB VFAT image..."
-  dd if=/dev/zero of="$BACKING_IMG" bs=1M count=128
-  mkfs.vfat "$BACKING_IMG"
+mkdir -p "$G/configs/c.1/strings/0x409"
+echo "Config 1: Mass Storage"              > "$G/configs/c.1/strings/0x409/configuration"
+echo 250                                    > "$G/configs/c.1/MaxPower"
+
+# Mass Storage
+if [[ ! -f "$MS_IMG" ]]; then
+  echo "[*] Creating 128MB VFAT image at $MS_IMG ..."
+  dd if=/dev/zero of="$MS_IMG" bs=1M count=128
+  mkfs.vfat "$MS_IMG"
 fi
-echo "$BACKING_IMG" > functions/mass_storage.usb0/lun.0/file
+mkdir -p "$G/functions/mass_storage.usb0"
+echo 1           > "$G/functions/mass_storage.usb0/stall"
+echo 0           > "$G/functions/mass_storage.usb0/ro"
+echo 1           > "$G/functions/mass_storage.usb0/removable"
+echo "$MS_IMG"   > "$G/functions/mass_storage.usb0/lun.0/file"
 
-ln -s functions/mass_storage.usb0 configs/c.1/ || true
+ln -s "$G/functions/mass_storage.usb0" "$G/configs/c.1/"
 
-UDC=$(ls /sys/class/udc | head -n1)
-echo "$UDC" > UDC
-
-echo "[p4wnp1] Storage-only ready"
+UDC=$(ls -1 "$UDCS" | head -n1 || true)
+[[ -z "$UDC" ]] && { echo "[!] No UDC present."; exit 3; }
+echo "$UDC" > "$G/UDC"
+echo "[+] MSD up on UDC: $UDC"

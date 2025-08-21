@@ -1,0 +1,21 @@
+# /opt/p4wnp1/payloads/manifests/windows_creds.yml
+name: windows_creds
+group: windows
+summary: >
+  Enumerate Windows credentials opportunistically via LSASS dump or
+  sam/system hive export over USB networking, then exfiltrate over HTTP.
+usage:
+  - "Start: p4wnctl payload start windows_creds"
+  - "Logs:  p4wnctl payload logs windows_creds"
+requirements:
+  - "USB mode provides RNDIS/ECM"
+  - "Impacket and procdump-like capability available"
+risks:
+  - "AV/EDR may alert on LSASS access"
+estimated_runtime: "1–3 minutes"
+env:
+  OUTPUT_DIR: "/opt/p4wnp1/loot/windows_creds"
+script: "payloads/windows/windows_creds.py"
+harden: true
+preflight:
+  - "command -v python3 >/dev/null"

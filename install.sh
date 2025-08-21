@@ -106,7 +106,12 @@ run rsync -aH --delete "$REPO_DIR"/ "$INSTALL_DIR"/
 
 echo "[*] Installing OS deps ..."
 run apt update
-run env DEBIAN_FRONTEND=noninteractive apt install -y python3 python3-pip dnsmasq hostapd
+run env DEBIAN_FRONTEND=noninteractive apt install -y \
+  python3 python3-pip \
+  python3-spidev python3-rpi.gpio \
+  dnsmasq hostapd \
+  fonts-dejavu-core
+
 
 echo "[*] Python deps ..."
 PIP_FLAGS=""
@@ -297,3 +302,5 @@ else
   echo "    No Web UI token set (open access on the bound interface)."
 fi
 echo "    Reboot on first install so dwc2 loads: sudo reboot"
+
+echo 'eval "$(register-python-argcomplete /opt/p4wnp1/p4wnctl.py)"' >> /etc/bash_completion.d/p4wnctl
