@@ -105,7 +105,7 @@ def primary_iface(order=("usb0", "eth0", "wlan0")) -> str | None:
             return k
     return None
 
-def primary_ip(order=("usb0", "eth0", "wlan0")) -> str | None:
+def primary_ip(order=("wlan0", "usb0", "eth0")) -> str | None:
     mapping = ips_by_iface()
     for want in order:
         if want in mapping and mapping[want]:
