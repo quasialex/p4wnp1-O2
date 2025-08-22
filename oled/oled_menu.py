@@ -6,7 +6,7 @@
 # Joystick: up/down only. **Flipped when ROT=0** so UP always feels like UP.
 
 import json, subprocess, os, sys, time, traceback
-import shlex, signal
+import shlex, signal, shutil
 from pathlib import Path
 from textwrap import wrap
 
@@ -48,6 +48,10 @@ GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 for p in (JOY_UP, JOY_DOWN, JOY_LEFT, JOY_RIGHT, JOY_CENTER, KEY1, KEY2, KEY3):
     GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+# --- Dynamic header (lightweight) ---
+HEADER_TTL = 1.0  # seconds to cache command output to avoid thrashing
+_header_cache = {}  # {(cmd:str): (ts:float, lastline:str)}
 
 # ---------- OLED init / rotation ----------
 def _load_rotation():
@@ -127,6 +131,31 @@ def read_status_lines(cmd: str, timeout: float = STATUS_TIMEOUT) -> list[str]:
     except Exception:
         return ["(error)"]
 
+def _last_nonempty_line(s: str) -> str:
+    s = (s or "").strip("\n")
+    for ln in s.splitlines()[::-1]:
+        ln = ln.strip()
+        if ln:
+            return ln
+    return ""
+
+def eval_header_cached(prefix: str | None, cmd: str | None) -> str | None:
+    """Return 'prefix + last stdout line', stderr ignored, cached for HEADER_TTL."""
+    if not cmd:
+        return None
+    now = time.monotonic()
+    cached = _header_cache.get(cmd)
+    if cached and (now - cached[0]) < HEADER_TTL:
+        line = cached[1]
+    else:
+        try:
+            r = shell(cmd, timeout=STATUS_TIMEOUT)
+            line = _last_nonempty_line(r.stdout) or "(no output)"   # stdout only
+        except Exception:
+            line = "(error)"
+        _header_cache[cmd] = (now, line)
+    return f"{prefix or ''}{line}"
+
 def run_cmd_like(script_or_action: str, label="action"):
     raw = token(script_or_action)
     if os.path.isfile(raw):
@@ -171,6 +200,25 @@ def run_cmd_bg(cmd: str, label: str = "bg"):
         return True, f"Started in background: {raw}"
     except Exception as e:
         return False, f"✗ BG start failed: {e}"
+
+def header_value(prefix: str|None, cmd: str|None) -> str|None:
+    """Return 'prefix + value' using stdout only (ignore stderr), cached for HEADER_TTL."""
+    if not cmd:
+        return None
+    now = time.monotonic()
+    cached = _header_cache.get(cmd)
+    if cached and (now - cached[0]) < HEADER_TTL:
+        line = cached[1]
+    else:
+        try:
+            r = shell(cmd, timeout=STATUS_TIMEOUT)
+            line = _last_nonempty_line(r.stdout)  # stdout only to avoid /bin/sh errors on screen
+            if not line:
+                line = "(no output)"
+        except Exception:
+            line = "(error)"
+        _header_cache[cmd] = (now, line)
+    return f"{prefix or ''}{line}"
 
 # ---------- Menu data helpers ----------
 def replace_tokens(obj):
@@ -254,6 +302,7 @@ class MenuState:
         self.index = 0
         self.offset = 0
         self.sel_cursor = {}
+        self.header_meta = None   # NEW: tuple(prefix, cmd) for this menu, or None
 
     def rows(self): return screen_rows()
     def current(self): return self.items[self.index] if self.items else None
@@ -294,16 +343,36 @@ def draw_text_lines(lines, hold=0.0):
 
 def render_list(state: "MenuState"):
     cols = screen_cols()
+
+    # If this menu itself has a header, draw it as the first, non-selectable line
+    header_lines = []
+    if state.header_meta:
+        hp, hc = state.header_meta
+        hv = header_value(hp, hc)
+        if hv:
+            header_lines.append(hv[:cols*2])  # clamp width; we already wrap later
+
     view = state.visible_slice()
     lines = []
+
+    # Draw list items
     for i, it in enumerate(view, start=state.offset):
         name = title_of(it)
         if is_selector(it):
             lab = choice_label(state.sel_choice(it))
             name = f"{name}: {lab}"
-        prefix = "> " if i == state.index else "  "   # no dot on others
+        prefix = "> " if i == state.index else "  "
         lines.append((prefix + name)[:cols*2])
-    draw_text_lines(lines)
+
+    # If we are hovering an item in the parent menu that has header_cmd/prefix, show it
+    cur = state.current()
+    if cur and is_submenu(cur) and ("header_cmd" in cur or "header_prefix" in cur):
+        hv = header_value(cur.get("header_prefix"), cur.get("header_cmd"))
+        if hv:
+            # Append at the end (like your screenshots), still non-selectable
+            lines.append(hv[:cols*2])
+
+    draw_text_lines(header_lines + lines)
 
 # ----- Detail view (for status outputs after Select) -----
 _detail = None  # dict with {'title': str, 'raw_lines': list[str], 'offset': int}
@@ -553,7 +622,10 @@ def main():
                 render_list(st); continue
             if is_submenu(cur):
                 sub = validate_items(cur["submenu"])
-                stack.append(MenuState(sub))
+                sub_state = MenuState(sub)
+                # NEW: pin this submenu's header (non-selectable first line)
+                sub_state.header_meta = (cur.get("header_prefix"), cur.get("header_cmd"))
+                stack.append(sub_state)
                 render_list(stack[-1]); continue
             exec_item(cur);  # may open detail view or run action/script
             if not detail_active():

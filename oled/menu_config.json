@@ -5,18 +5,15 @@
       { "name": "USB:",         "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
       { "name": "Payload:",     "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
       { "name": "Web UI:",      "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
-      { "name": "IP:",          "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" },
-      { "name": "← Back" }
+      { "name": "IP:",          "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" }
     ]
   },
   {
-    "name": "USB Mode",
+    "name": "USB Mode", "header_prefix": "Active: ", "header_cmd": "{P4WN_HOME}/p4wnctl.py usb status",
     "submenu": [
-      { "name": "Active:", "status_cmd": "{P4WN_HOME}/p4wnctl.py usb statusi | head -n1" },
       { "name": "HID + NET",        "action": "{P4WN_HOME}/p4wnctl.py usb set hid_net_only" },
       { "name": "HID + NET + MSD",  "action": "{P4WN_HOME}/p4wnctl.py usb set hid_storage_net" },
-      { "name": "Storage Only",     "action": "{P4WN_HOME}/p4wnctl.py usb set storage_only" },
-      { "name": "← Back" }
+      { "name": "Storage Only",     "action": "{P4WN_HOME}/p4wnctl.py usb set storage_only" }
     ]
   },
   {
@@ -25,8 +22,7 @@
       { "name": "Current:", "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
       { "name": "reverse_shell",       "action": "{P4WN_HOME}/p4wnctl.py payload set reverse_shell" },
       { "name": "autorun_powershell",  "action": "{P4WN_HOME}/p4wnctl.py payload set autorun_powershell" },
-      { "name": "test_typing",         "action": "{P4WN_HOME}/p4wnctl.py payload set test_typing" },
-      { "name": "← Back" }
+      { "name": "test_typing",         "action": "{P4WN_HOME}/p4wnctl.py payload set test_typing" }
     ]
   },
   {
@@ -47,8 +43,7 @@
       { "name": "Stop",     "action": "{P4WN_HOME}/p4wnctl.py web stop" },
       { "name": "Restart",  "action": "{P4WN_HOME}/p4wnctl.py web restart" },
       { "name": "Enable",   "action": "{P4WN_HOME}/p4wnctl.py web enable" },
-      { "name": "Disable",  "action": "{P4WN_HOME}/p4wnctl.py web disable" },
-      { "name": "← Back" }
+      { "name": "Disable",  "action": "{P4WN_HOME}/p4wnctl.py web disable" }
     ]
   },
   {
@@ -59,8 +54,7 @@
       { "name": "USB Stealer",              "script": "{P4WN_HOME}/payloads/hid/usb_stealer.py" },
       { "name": "Domain Enumerator",        "script": "{P4WN_HOME}/payloads/hid/domain_enum_hid.py" },
       { "name": "Lockpicker",               "script": "{P4WN_HOME}/payloads/hid/lockpicker.py" },
-      { "name": "Test Typing",              "script": "{P4WN_HOME}/payloads/hid/test_typing.py" },
-      { "name": "← Back" }
+      { "name": "Test Typing",              "script": "{P4WN_HOME}/payloads/hid/test_typing.py" }
     ]
   },
   {
@@ -69,8 +63,7 @@
       { "name": "Rogue DHCP + DNS",         "script": "{P4WN_HOME}/payloads/network/rogue_dhcp_dns.py" },
       { "name": "DNS Spoof & Redirect",     "script": "{P4WN_HOME}/payloads/network/dns_spoof_redirect.py" },
       { "name": "Responder Attack",         "script": "{P4WN_HOME}/payloads/network/responder_attack.py" },
-      { "name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.py" },
-      { "name": "← Back" }
+      { "name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.py" }
     ]
   },
   {
@@ -78,8 +71,7 @@
     "submenu": [
       { "name": "HID Backdoor Listener",  "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.py" },
       { "name": "Reverse Shell: Start 4444", "script": "{P4WN_HOME}/payloads/listeners/reverse_shell_listener.py", "background": true },
-      { "name": "Reverse Shell: Stop", "action": "bash -lc \"tmux kill-session -t p4wnp1_rshell || systemctl stop p4wnp1-rshell || pkill -f 'nc -lvnp 4444'\"", "background": true },
-      { "name": "← Back" }
+      { "name": "Reverse Shell: Stop", "action": "bash -lc \"tmux kill-session -t p4wnp1_rshell || systemctl stop p4wnp1-rshell || pkill -f 'nc -lvnp 4444'\"", "background": true }
     ]
   },
   {
@@ -88,8 +80,7 @@
       { "name": "Start Serial Shell",              "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.py" },
       { "name": "Stop Serial Shell",               "action": "systemctl stop serial-getty@ttyGS0.service" },
       { "name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.py" },
-      { "name": "Stop Tmux Shell",                 "action": "pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
-      { "name": "← Back" }
+      { "name": "Stop Tmux Shell",                 "action": "pkill -f 'tmux -S /tmp/p4wnp1_shell'" }
     ]
   },
   {
@@ -112,8 +103,7 @@
     "name": "System",
     "submenu": [
       { "name": "Reboot",   "action": "reboot" },
-      { "name": "Shutdown", "action": "poweroff" },
-      { "name": "← Back" }
+      { "name": "Shutdown", "action": "poweroff" }
     ]
   }
 ]
