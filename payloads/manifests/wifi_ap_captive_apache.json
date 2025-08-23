@@ -1,18 +1,42 @@
 {
   "name": "wifi_ap_captive_apache",
   "group": "network",
-  "summary": "Bring up Wi‑Fi AP + DHCP + DNS spoof + Apache captive portal",
+  "summary": "Start wlan0 AP + captive DNS/DHCP + Apache captive portal",
   "requirements": ["net"],
+  "env": {
+    "IFACE": "wlan0",
+    "AP_SSID": "P4wnP1_O2",
+    "AP_PSK": "P4wnIsHere!",
+    "AP_CIDR": "10.99.0.1/24",
+    "AP_SUBNET": "10.99.0.0/24",
+    "AP_RANGE_START": "10.99.0.50",
+    "AP_RANGE_END": "10.99.0.150"
+  },
   "harden": false,
   "preflight": [
-    "ip link set wlan0 down || true",
-    "ip addr flush dev wlan0 || true",
-    "ip link set wlan0 up || true",
-    "sysctl -w net.ipv4.ip_forward=1"
+    "export DEBIAN_FRONTEND=noninteractive",
+    "apt-get update -y",
+    "apt-get install -y --no-install-recommends hostapd dnsmasq iptables-nft apache2",
+    "systemctl unmask hostapd || true",
+    "systemctl stop hostapd dnsmasq || true",
+    "ip link set ${IFACE} down || true",
+    "ip addr flush dev ${IFACE} || true",
+    "ip addr add ${AP_CIDR} dev ${IFACE}",
+    "ip link set ${IFACE} up",
+    "cat > /etc/hostapd/hostapd.conf <<'EOF'\ninterface=${IFACE}\ndriver=nl80211\nssid=${AP_SSID}\nhw_mode=g\nchannel=6\nwmm_enabled=0\nauth_algs=1\nwpa=2\nwpa_passphrase=${AP_PSK}\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nEOF",
+    "sed -i 's|^[#]*DAEMON_CONF=.*|DAEMON_CONF=\"/etc/hostapd/hostapd.conf\"|' /etc/default/hostapd || true",
+    "cat > /etc/dnsmasq.d/p4wnp1-ap.conf <<'EOF'\ninterface=${IFACE}\nbind-interfaces\ndhcp-range=${AP_RANGE_START},${AP_RANGE_END},12h\ndomain-needed\nbogus-priv\nlisten-address=127.0.0.1,${AP_CIDR%/*}\n# Force all DNS to us\naddress=/#/${AP_CIDR%/*}\n# Hand out our Pi as router\ndhcp-option=3,${AP_CIDR%/*}\n# Hand out our Pi as DNS\ndhcp-option=6,${AP_CIDR%/*}\nEOF",
+    "rm -f /etc/dnsmasq.d/README || true",
+    "sysctl -w net.ipv4.ip_forward=1",
+    "sed -i 's/^#\\?net.ipv4.ip_forward=.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf || true",
+    "iptables-nft -t nat -F || true",
+    "iptables-nft -F || true",
+    "iptables-nft -t nat -A PREROUTING -i ${IFACE} -p tcp --dport 80 -j REDIRECT --to-ports 80",
+    "iptables-nft -t nat -A POSTROUTING -s ${AP_SUBNET} -j MASQUERADE || true",
+    "a2enmod rewrite",
+    "systemctl restart apache2",
+    "systemctl restart dnsmasq",
+    "systemctl restart hostapd"
   ],
-  "script": "payloads/network/wifi_ap_captive_apache.py",
-  "usage": [
-    "p4wnctl.py payload run-now apache_portal_setup",
-    "p4wnctl.py payload run-now wifi_ap_captive_apache"
-  ]
+  "cmd": "echo 'AP up on ${IFACE}. SSID=${AP_SSID}. Clients will land on Apache captive portal.' && sleep infinity"
 }

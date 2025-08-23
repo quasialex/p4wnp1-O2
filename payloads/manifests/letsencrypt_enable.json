@@ -1,0 +1,16 @@
+{
+  "name": "letsencrypt_enable",
+  "group": "network",
+  "summary": "Obtain/renew real certs for Apache with certbot. Requires public DNS.",
+  "requirements": ["net"],
+  "harden": false,
+  "env": { "LE_DOMAIN": "your.domain.example" },
+  "preflight": [
+    "export DEBIAN_FRONTEND=noninteractive",
+    "apt-get update -y",
+    "apt-get install -y --no-install-recommends certbot python3-certbot-apache",
+    "a2enmod ssl headers",
+    "systemctl restart apache2"
+  ],
+  "cmd": "certbot --apache -d ${LE_DOMAIN} --non-interactive --agree-tos -m admin@${LE_DOMAIN} --redirect || true"
+}

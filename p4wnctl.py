@@ -146,25 +146,43 @@ def primary_ip(order=("usb0", "eth0", "wlan0")) -> str | None:
 def default_route_iface() -> str | None:
     """Return the interface used for the default route (0.0.0.0/0)."""
     ip_bin = which("ip") or "/sbin/ip"
-    # Try the canonical default route
+
+    # Fast path: ‘ip route show default’
     cp = sh(f"{ip_bin} route show default", check=False)
     if cp.stdout:
-        parts = cp.stdout.split()
-        # typical: "default via 192.168.1.1 dev wlan0 ..."
-        if "dev" in parts:
+        toks = cp.stdout.strip().split()
+        if "dev" in toks:
             try:
-                return parts[parts.index("dev") + 1]
+                return toks[toks.index("dev") + 1]
             except Exception:
                 pass
-    # Fallback: who would route to 1.1.1.1?
+
+    # Fallback: look at route to a public IP
     cp = sh(f"{ip_bin} route get 1.1.1.1", check=False)
+    if cp.stdout:
+        toks = cp.stdout.strip().split()
+        if "dev" in toks:
+            try:
+                return toks[toks.index("dev") + 1]
+            except Exception:
+                pass
+    return None
+
+def current_ssh_iface() -> str | None:
+    """
+    Best effort: if running under SSH, find the local interface used to reach the client IP.
+    """
+    peer = os.environ.get("SSH_CLIENT") or os.environ.get("SSH_CONNECTION")
+    if not peer:
+        return None
+    client_ip = peer.strip().split()[0]
+    ip_bin = which("ip") or "/sbin/ip"
+    cp = sh(f"{ip_bin} route get {client_ip}", check=False)
     if cp.stdout and " dev " in cp.stdout:
-        # typical: "1.1.1.1 via 192.168.1.1 dev wlan0 src 192.168.1.50 ..."
-        for tok in cp.stdout.split():
-            # first token after "dev"
-            if tok == "dev":
-                # next token is iface
-                return cp.stdout.split().split("dev",1)[1].split()[0]
+        parts = cp.stdout.split()
+        for i, tok in enumerate(parts):
+            if tok == "dev" and i + 1 < len(parts):
+                return parts[i + 1]
     return None
 
 def gadget_ifaces() -> list[str]:
@@ -643,11 +661,23 @@ def _apply_env_and_cwd(cmd: str, env: dict | None, wdir: str | None) -> str:
 def _run_preflight(env: dict | None, wdir: str | None, pre: list[str] | None) -> int:
     if not pre:
         return 0
+    # Always set noninteractive to avoid dpkg/apt prompts; add a sane default timeout
+    env = dict(env or {})
+    env.setdefault("DEBIAN_FRONTEND", "noninteractive")
+    env.setdefault("APT_LISTCHANGES_FRONTEND", "none")
     seq = " && ".join(pre)
     full = _apply_env_and_cwd(seq, env, wdir)
-    cp = sh(f"/bin/bash -lc {json.dumps(full)}", check=False)
+    # Use unbuffered output to the journald via systemd-run later; here we still run synchronously but won’t prompt
+    cp = subprocess.run(
+        f"/bin/bash -lc {json.dumps(full)}",
+        shell=True,
+        text=True,
+        capture_output=True,
+        timeout=1200  # 20 minutes cap so it never wedges your TTY
+    )
     if cp.returncode != 0:
-        sys.stdout.write(cp.stdout); sys.stderr.write(cp.stderr)
+        sys.stdout.write(cp.stdout or "")
+        sys.stderr.write(cp.stderr or "")
     return cp.returncode
 
 def payload_start(name: str) -> int:
@@ -899,6 +929,15 @@ def ensure_for_requirements(reqs: list[str]) -> int:
     return rc
 
 def payload_run_now(name: str) -> int:
+    # Prevent shooting ourselves in the foot: if a payload will flip wlan0 into AP mode
+    # and our current SSH session is on wlan0, refuse unless explicitly forced.
+    dangerous = name.lower().startswith("wifi_ap_")
+    if dangerous:
+        ssh_if = current_ssh_iface()
+        if ssh_if == "wlan0" and os.environ.get("P4WN_FORCE_WIFI", "0").lower() not in ("1","true","yes","on"):
+            print("[!] Refusing to start Wi‑Fi AP payload while current SSH session is on wlan0.", file=sys.stderr)
+            print("    Reconnect over Ethernet/USB gadget or set P4WN_FORCE_WIFI=1 to override.", file=sys.stderr)
+            return 2
     """
     Ensure required modes (HID/NET/MSD/Serial), then start payload.
     'active' uses the legacy ACTIVE_PAYLOAD_FILE pointer.

@@ -1,16 +1,22 @@
 {
   "name": "apache_portal_setup",
   "group": "network",
-  "summary": "Install & configure Apache for captive portal + payload hosting (optionally Let's Encrypt).",
+  "summary": "Install & configure Apache; publish repo captive portal.",
   "requirements": ["net"],
   "harden": false,
   "preflight": [
+    "export DEBIAN_FRONTEND=noninteractive",
     "apt-get update -y",
-    "apt-get install -y apache2 certbot python3-certbot-apache",
-    "a2enmod rewrite headers ssl proxy proxy_http"
+    "apt-get install -y --no-install-recommends apache2",
+    "mkdir -p /opt/p4wnp1/payloads/network/web/captive",
+    "mkdir -p /opt/p4wnp1/payloads/network/web/payloads",
+    "mkdir -p /var/www/html",
+    "rsync -a --delete /opt/p4wnp1/payloads/network/web/captive/ /var/www/html/",
+    "a2dissite 000-default.conf >/dev/null 2>&1 || true",
+    "printf '%s\\n' '<VirtualHost *:80>' '  DocumentRoot /var/www/html' '  <Directory /var/www/html>' '    Options Indexes FollowSymLinks' '    AllowOverride All' '    Require all granted' '  </Directory>' '</VirtualHost>' > /etc/apache2/sites-available/p4wnp1-portal.conf",
+    "a2ensite p4wnp1-portal.conf",
+    "a2enmod rewrite",
+    "systemctl enable --now apache2"
   ],
-  "script": "payloads/network/apache_portal_setup.py",
-  "usage": [
-    "p4wnctl.py payload run-now apache_portal_setup"
-  ]
+  "cmd": "echo 'Apache portal is deployed to /var/www/html from repo captive dir.' && sleep 1"
 }

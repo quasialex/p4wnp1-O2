@@ -1,0 +1,19 @@
+name: letsencrypt_enable
+group: setup
+summary: Obtain/renew certs via certbot (webroot) and enable SSL vhost
+harden: false
+requirements: []
+env:
+  DOMAIN: example.com
+  EMAIL: admin@example.com
+  WEBROOT: /var/www/p4wnp1-portal
+  SSL_SITE: p4wnp1-portal-ssl.conf
+preflight:
+  - "apt-get update -y -qq"
+  - "apt-get install -y -qq certbot python3-certbot-apache"
+  - "certbot certonly --agree-tos -m ${EMAIL} --non-interactive --webroot -w ${WEBROOT} -d ${DOMAIN} || true"
+  - "cp -f /opt/p4wnp1/payloads/network/web/apache/${SSL_SITE} /etc/apache2/sites-available/${SSL_SITE}"
+  - "sed -i \"s/__DOMAIN__/${DOMAIN}/g\" /etc/apache2/sites-available/${SSL_SITE}"
+  - "a2ensite ${SSL_SITE}"
+  - "systemctl reload apache2"
+cmd: "echo 'If cert exists, SSL site enabled for ${DOMAIN}'"

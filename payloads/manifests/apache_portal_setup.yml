@@ -1,0 +1,20 @@
+name: apache_portal_setup
+group: setup
+summary: Install and configure Apache for captive portal + payload hosting
+harden: false
+requirements: []         # do NOT touch USB/Wi‑Fi for setup
+env:
+  DEBIAN_FRONTEND: noninteractive
+  APACHE_SITE: p4wnp1-portal.conf
+  WEBROOT: /var/www/p4wnp1-portal
+preflight:
+  - "apt-get update -y -qq"
+  - "apt-get install -y -qq apache2"
+  - "mkdir -p ${WEBROOT}"
+  - "rsync -a /opt/p4wnp1/payloads/network/web/ ${WEBROOT}/"
+  - "a2dissite 000-default.conf || true"
+  - "cp -f /opt/p4wnp1/payloads/network/web/apache/${APACHE_SITE} /etc/apache2/sites-available/${APACHE_SITE}"
+  - "a2ensite ${APACHE_SITE}"
+  - "a2enmod rewrite ssl headers || true"
+  - "systemctl restart apache2"
+cmd: "echo 'Apache portal prepared at ${WEBROOT} and site enabled.'"
