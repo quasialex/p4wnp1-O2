@@ -1,6 +1,0 @@
-{
-  "name": "PowerShell Reverse Shell",
-  "description": "Uses RS_HOST and RS_PORT from reverse_shell.conf",
-  "author": "quasialex",
-  "type": "reverse_shell"
-}

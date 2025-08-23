@@ -1,10 +1,8 @@
 {
   "name": "sslstrip_phishing",
-  "cmd": "${SSLSTRIP_BIN:-sslstrip} ${ARGS:-}",
-  "env": { "IFACE": "usb0", "ARGS": "" },
+  "kind": "network",
+  "env": { "IFACE": "usb0" },
+  "cmd": [ "/bin/bash", "-lc", "/opt/p4wnp1/extras/network/sslstrip_phishing.sh \"$IFACE\"" ],
   "working_dir": "/opt/p4wnp1",
-  "harden": true,
-  "preflight": [
-    "command -v \"${SSLSTRIP_BIN:-sslstrip}\" >/dev/null 2>&1 || { echo '[!] sslstrip binary not found'; exit 127; }"
-  ]
+  "harden": true
 }

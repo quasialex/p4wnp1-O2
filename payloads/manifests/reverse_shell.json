@@ -1,10 +1,7 @@
 {
   "name": "reverse_shell",
-  "script": "payloads/reverse_shell.py",
-  "args": [],
+  "kind": "hid",
+  "cmd": [ "/bin/bash", "-lc", "/opt/p4wnp1/extras/reverse_shell.sh" ],
   "working_dir": "/opt/p4wnp1",
-  "harden": true,
-  "preflight": [
-    "test -f /opt/p4wnp1/payloads/reverse_shell.py || { echo '[!] payloads/reverse_shell.py missing'; exit 66; }"
-  ]
+  "harden": true
 }

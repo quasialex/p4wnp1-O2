@@ -1,8 +1,0 @@
-{
-  "name": "responder",
-  "kind": "network",
-  "env": { "IFACE": "usb0" },
-  "cmd": [ "/bin/bash", "-lc", "/opt/p4wnp1/extras/network/run_responder.sh \"$IFACE\"" ],
-  "working_dir": "/opt/p4wnp1",
-  "harden": true
-}

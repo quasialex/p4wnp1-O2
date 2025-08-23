@@ -1,7 +1,0 @@
-{
-  "name": "autorun_powershell",
-  "kind": "hid",
-  "cmd": [ "/bin/bash", "-lc", "/opt/p4wnp1/extras/hid/autorun_powershell.sh" ],
-  "working_dir": "/opt/p4wnp1",
-  "harden": true
-}

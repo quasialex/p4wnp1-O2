@@ -210,19 +210,6 @@ run chmod +x "$INSTALL_DIR"/hooks/*.sh 2>/dev/null || true
 run chmod +x "$INSTALL_DIR"/oled/run_oled_menu.sh 2>/dev/null || true
 [[ -f "$INSTALL_DIR/p4wnctl.py" ]] && run chmod +x "$INSTALL_DIR/p4wnctl.py"
 
-# --- Create mass-storage file if missing ---
-MSD="$INSTALL_DIR/usb_mass_storage.img"
-if [[ ! -f "$MSD" ]]; then
-  echo "[*] Creating 128MB VFAT mass-storage image ..."
-  if [[ "$DRY_RUN" == "yes" ]]; then
-    echo "[dry-run] dd if=/dev/zero of=\"$MSD\" bs=1M count=128"
-    echo "[dry-run] mkfs.vfat \"$MSD\""
-  else
-    run dd if=/dev/zero of="$MSD" bs=1M count=128
-    run mkfs.vfat "$MSD"
-  fi
-fi
-
 # --- Optional: sudoers for OLED/CLI ---
 add_sudoers() {
   local user="$1"

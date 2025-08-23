@@ -45,7 +45,7 @@ USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
 USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
 USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")
 MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
-MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "64"))
+MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "128"))
 
 # Presets for the TUI selector
 USB_CHOICES = [
