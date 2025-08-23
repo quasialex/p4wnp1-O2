@@ -1,0 +1,6 @@
+{
+  "name": "macos_reverse_osascript",
+  "group": "hid",
+  "summary": "macOS HID: osascript opens Terminal with reverse TCP 4444",
+  "requirements": ["hid"]
+}

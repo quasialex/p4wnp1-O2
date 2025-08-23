@@ -1,0 +1,7 @@
+RewriteEngine On
+# Treat common captive probes as 302 to /
+RewriteCond %{REQUEST_URI} ^/generate_204$ [OR]
+RewriteCond %{REQUEST_URI} ^/gen_204$ [OR]
+RewriteCond %{REQUEST_URI} ^/ncsi.txt$ [OR]
+RewriteCond %{REQUEST_URI} ^/hotspot-detect.html$
+RewriteRule ^.*$ / [R=302,L]

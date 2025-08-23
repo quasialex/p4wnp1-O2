@@ -1,0 +1,8 @@
+115200
+local
+noauth
+nodetach
+debug
+proxyarp
+ms-dns 10.77.0.1
+10.77.0.1:10.77.0.2

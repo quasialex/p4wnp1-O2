@@ -1,0 +1,7 @@
+GUI r
+DELAY 400
+STRING notepad
+ENTER
+DELAY 500
+STRING hello from p4wn
+

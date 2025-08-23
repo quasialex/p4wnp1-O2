@@ -1,0 +1,13 @@
+{
+  "name": "duck_run",
+  "group": "hid",
+  "summary": "Run a DuckyScript file via HID",
+  "requirements": ["hid"],
+  "harden": false,
+  "args": ["payloads/hid/sample.duck"],
+  "script": "payloads/hid/duck_run.py",
+  "usage": [
+    "p4wnctl.py payload run-now duck_run",
+    "p4wnctl.py payload start duck_run -- args <path_to_ducky>"
+  ]
+}

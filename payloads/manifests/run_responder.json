@@ -1,0 +1,7 @@
+{
+  "name": "run_responder",
+  "group": "network",
+  "summary": "Start/stop/status for Responder on the gadget/Wi‑Fi iface.",
+  "requirements": ["net"],
+  "env": { "IFACE": "usb0" }
+}

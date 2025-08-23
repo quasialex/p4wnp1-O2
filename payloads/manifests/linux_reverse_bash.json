@@ -1,0 +1,6 @@
+{
+  "name": "linux_reverse_bash",
+  "group": "hid",
+  "summary": "Linux HID: bash reverse TCP on 4444",
+  "requirements": ["hid"]
+}

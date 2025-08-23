@@ -1,8 +1,0 @@
-# Simulate Win+R, then type 'cmd'
-<GUI> r
-sleep 0.5
-cmd
-<ENTER>
-sleep 0.5
-echo off
-whoami

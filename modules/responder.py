@@ -1,28 +1,35 @@
-# responder.py
-import subprocess
+#!/usr/bin/env python3
+import os, subprocess, signal
 
-def meta():
-    return {
-        "name": "responder",
-        "summary": "Start/stop Responder for LLMNR/NBT-NS/MDNS capture",
-        "usage": "p4wnctl.py responder start --iface usb0 --wpad --analyze",
-        "notes": "Use only on engagements with explicit authorization.",
-    }
+PID="/run/p4wnp1-responder.pid"
+LOG="/var/log/p4wnp1-responder.log"
 
-def register(sub):
-    p = sub.add_parser("responder", help="LLMNR/NBT-NS/MDNS poisoning & loot")
-    ss = p.add_subparsers(dest="res_cmd")
-    st = ss.add_parser("start", help="Start Responder")
-    st.add_argument("--iface", default="usb0")
-    st.add_argument("--wpad", action="store_true")
-    st.add_argument("--analyze", action="store_true")
-    sp = ss.add_parser("stop", help="Stop Responder")
+def _running():
+    try:
+        if os.path.exists(PID):
+            with open(PID) as f: pid=int(f.read().strip())
+            os.kill(pid,0)
+            return pid
+    except Exception: pass
+    return None
 
-def handle(args):
-    if args.res_cmd == "start":
-        cmd = ["responder", "-I", args.iface, "-v"]
-        if args.wpad: cmd += ["-w"]
-        if args.analyze: cmd += ["-A"]
-        return subprocess.call(cmd)
-    elif args.res_cmd == "stop":
-        return subprocess.call(["pkill", "-f", "responder.py"])
+def start():
+    if _running(): print("Responder already running"); return 0
+    iface=os.getenv("IFACE", os.getenv("P4WN_NET_IFACE","usb0"))
+    args=["responder","-I",iface,"-wrfPd"]
+    with open(LOG,"ab", buffering=0) as lf:
+        p=subprocess.Popen(args, stdout=lf, stderr=lf, preexec_fn=os.setsid)
+        with open(PID,"w") as f: f.write(str(p.pid))
+    print(f"Responder started on {iface} (pid {p.pid})"); return 0
+
+def stop():
+    pid=_running()
+    if not pid: print("Responder not running"); return 0
+    try: os.killpg(pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    try: os.remove(PID)
+    except FileNotFoundError: pass
+    print("Responder stopped"); return 0
+
+def status():
+    print("running" if _running() else "stopped"); return 0

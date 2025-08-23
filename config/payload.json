@@ -1,9 +1,0 @@
-{
-  "rogue_dhcp_dns": {"enabled": true, "type": "network", "path": "payloads/network/rogue_dhcp_dns.sh"},
-  "reverse_shell_listener": {"enabled": true, "type": "listener", "path": "payloads/listeners/reverse_shell_listener.sh"},
-  "wifi_ap": {"enabled": true, "type": "network", "path": "payloads/network/wifi_ap.sh"},
-  "lockpicker": {"enabled": true, "type": "windows", "path": "payloads/windows/lockpicker.sh"},
-  "mass_storage": {"enabled": true, "type": "network", "path": "payloads/network/mass_storage.sh"},
-  "responder": {"enabled": true, "type": "network", "path": "payloads/network/responder.sh"},
-  "hid_backdoor": {"enabled": true, "type": "listener", "path": "payloads/listeners/hid_backdoor.sh"}
-}

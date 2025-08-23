@@ -1,0 +1,4 @@
+body { font-family: system-ui, sans-serif; margin: 0; background: #101114; color: #e9eaee; }
+.wrap { max-width: 420px; margin: 10vh auto; background: #1a1c21; padding: 24px; border-radius: 16px; }
+input,button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 10px; border: 1px solid #2c2f36; background:#0f1115; color:#e9eaee; }
+button { background:#4b8bff; border: none; }

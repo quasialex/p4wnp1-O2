@@ -1,0 +1,11 @@
+{
+  "name": "ntlmrelayx",
+  "group": "network",
+  "summary": "Run ntlmrelayx against targets list, loot to /opt/p4wnp1/loot/ntlmrelayx",
+  "requirements": ["net"],
+  "env": {
+    "RELAY_TARGETS": "/opt/p4wnp1/config/relay_targets.txt",
+    "RELAY_LOOT": "/opt/p4wnp1/loot/ntlmrelayx",
+    "IFACE": "usb0"
+  }
+}

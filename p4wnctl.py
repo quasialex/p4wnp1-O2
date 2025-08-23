@@ -50,8 +50,11 @@ MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "128"))
 # Presets for the TUI selector
 USB_CHOICES = [
     ("HID + NET", "hid_net_only"),
+    ("HID + NET + SER (ACM)", "hid_net_acm"),
     ("HID + NET + MSD", "hid_storage_net"),
+    ("HID + NET + MSD + SER", "hid_storage_net_acm"),
     ("Storage Only", "storage_only"),
+
 ]
 
 # ======= Small helpers =======
@@ -72,6 +75,14 @@ def last_line(txt: str) -> str:
         if ln:
             return ln
     return ""
+
+def ensure_mass_storage_image(img="/opt/p4wnp1/config/usb_mass_storage.img", size_mb=256):
+    import subprocess, os
+    os.makedirs(os.path.dirname(img), exist_ok=True)
+    if not os.path.exists(img) or os.path.getsize(img) < size_mb*1024*1024:
+        subprocess.run(["truncate", "-s", f"{size_mb}M", img], check=True)
+        subprocess.run(["mkfs.vfat", "-F", "32", "-n", "P4WNP1", img], check=True)
+    return img
 
 def which(path: str) -> str | None:
     for d in os.environ.get("PATH", "").split(os.pathsep):
@@ -132,6 +143,50 @@ def primary_ip(order=("usb0", "eth0", "wlan0")) -> str | None:
     except Exception:
         return None
 
+def default_route_iface() -> str | None:
+    """Return the interface used for the default route (0.0.0.0/0)."""
+    ip_bin = which("ip") or "/sbin/ip"
+    # Try the canonical default route
+    cp = sh(f"{ip_bin} route show default", check=False)
+    if cp.stdout:
+        parts = cp.stdout.split()
+        # typical: "default via 192.168.1.1 dev wlan0 ..."
+        if "dev" in parts:
+            try:
+                return parts[parts.index("dev") + 1]
+            except Exception:
+                pass
+    # Fallback: who would route to 1.1.1.1?
+    cp = sh(f"{ip_bin} route get 1.1.1.1", check=False)
+    if cp.stdout and " dev " in cp.stdout:
+        # typical: "1.1.1.1 via 192.168.1.1 dev wlan0 src 192.168.1.50 ..."
+        for tok in cp.stdout.split():
+            # first token after "dev"
+            if tok == "dev":
+                # next token is iface
+                return cp.stdout.split().split("dev",1)[1].split()[0]
+    return None
+
+def gadget_ifaces() -> list[str]:
+    """
+    Return a list of NIC names provided by the USB gadget (RNDIS/ECM),
+    e.g., ['usb0', 'usb1'] — robust even if names differ.
+    """
+    import os
+    bases = "/sys/class/net"
+    res = []
+    for iface in os.listdir(bases):
+        dev = os.path.join(bases, iface, "device")
+        if not os.path.exists(dev):
+            continue
+        drv = os.path.join(dev, "driver")
+        # e.g. /sys/class/net/usb0/device/driver -> .../usb_f_rndis or usb_f_ecm
+        if os.path.islink(drv):
+            target = os.readlink(drv).lower()
+            if "usb" in target or "rndis" in target or "ecm" in target or "g_" in target:
+                res.append(iface)
+    return sorted(set(res))
+
 # ======= Service management (generic) =======
 def svc_paths(unit: str) -> tuple[Path, Path]:
     src1 = P4WN_HOME / "systemd" / unit
@@ -188,7 +243,9 @@ def usb_unload_legacy():
 def usb_force_reset():
     need_root()
     usb_preflight()
+    # These often “hold” /dev/ttyGS0 or interfere with UDC binding
     systemctl("stop", "serial-getty@ttyGS0.service")
+    systemctl("stop", "ModemManager.service")
     usb_unbind_all()
     usb_unload_legacy()
 
@@ -356,6 +413,17 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_ecm(), cfg)
         _link(_func_rndis(), cfg)
         _link(_func_msd(), cfg)
+    elif mode == "hid_net_acm":
+        _link(_func_hid(), cfg)
+        _link(_func_ecm(), cfg)
+        _link(_func_rndis(), cfg)
+        _link(_func_acm(), cfg)
+    elif mode == "hid_storage_net_acm":
+        _link(_func_hid(), cfg)
+        _link(_func_ecm(), cfg)
+        _link(_func_rndis(), cfg)
+        _link(_func_msd(), cfg)
+        _link(_func_acm(), cfg)
     elif mode == "storage_only":
         _link(_func_msd(), cfg)
     else:
@@ -456,6 +524,16 @@ def usb_status(_args=None) -> int:
     print(usb_status_text()); return 0
 
 def usb_set(mode: str) -> int:
+    # Guard: do not change gadget if the *default route* is on usb*, unless forced
+    route_if = default_route_iface()
+    force = os.environ.get("P4WN_FORCE_USB", "0").lower() in ("1","true","yes","on")
+    if route_if and route_if.startswith("usb") and not force:
+        print(f"[!] Refusing to change USB gadget while default route is via '{route_if}'.", file=sys.stderr)
+        print("    Connect over Wi‑Fi/Ethernet or set P4WN_FORCE_USB=1 to override.", file=sys.stderr)
+        return 2
+
+    if "storage" in mode:
+        ensure_mass_storage_image()
     need_root()
     usb_preflight()
     usb_force_reset()
@@ -805,11 +883,19 @@ def ensure_for_requirements(reqs: list[str]) -> int:
     want_net = "net" in reqs
     want_msd = "msd" in reqs
     want_acm = "serial" in reqs
-    rc = usb_compose_apply(want_hid, want_net, want_msd, want_acm)
-    # tmux check is best-effort; don't fail if absent
-    if "tmux" in reqs:
-        if not which("tmux"):
+
+    # If nothing USB-related requested, skip touching the gadget
+    if not (want_hid or want_net or want_msd or want_acm):
+        # best-effort tmux warning only
+        if "tmux" in reqs and not which("tmux"):
             print("[!] tmux not found; install tmux for best results.", file=sys.stderr)
+        return 0
+
+    rc = usb_compose_apply(want_hid, want_net, want_msd, want_acm)
+
+    if "tmux" in reqs and not which("tmux"):
+        print("[!] tmux not found; install tmux for best results.", file=sys.stderr)
+
     return rc
 
 def payload_run_now(name: str) -> int:
@@ -1013,6 +1099,7 @@ USB gadget controls
 Commands:
   usb status
   usb set {hid_net_only|hid_storage_net|storage_only}
+  usb set {hid_net_only|hid_net_acm|hid_storage_net|hid_storage_net_acm|storage_only}
   usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1]
 """)
 

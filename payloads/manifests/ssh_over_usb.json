@@ -1,0 +1,11 @@
+{
+  "name": "ssh_over_usb",
+  "group": "network",
+  "summary": "Ensure sshd is listening and reachable on usb0 or wlan0",
+  "requirements": ["net"],
+  "harden": false,
+  "script": "payloads/network/ssh_over_usb.py",
+  "usage": [
+    "p4wnctl.py payload run-now ssh_over_usb"
+  ]
+}
