@@ -680,7 +680,38 @@ def _run_preflight(env: dict | None, wdir: str | None, pre: list[str] | None) ->
         sys.stderr.write(cp.stderr or "")
     return cp.returncode
 
+def _transient_unit_cleanup(unit: str):
+    """Ensure no stale fragment/transient unit blocks systemd-run."""
+    # Stop if running, ignore errors
+    systemctl("stop", unit, check=False)
+    systemctl("disable", unit, check=False)
+    # Remove fragment file if it exists
+    frag = Path("/etc/systemd/system") / unit
+    dropin = Path("/etc/systemd/system") / (unit + ".d")
+    try:
+        if frag.exists():
+            frag.unlink()
+    except Exception:
+        pass
+    try:
+        if dropin.exists():
+            for f in dropin.glob("*"):
+                f.unlink(missing_ok=True)
+            dropin.rmdir()
+    except Exception:
+        pass
+    # Remove stale transient symlink/file
+    try:
+        (Path("/run/systemd/transient") / unit).unlink()
+    except Exception:
+        pass
+    # Reload & clear failures
+    sh("systemctl daemon-reload", check=False)
+    sh("systemctl reset-failed", check=False)
+
 def payload_start(name: str) -> int:
+    unit = f"p4w-payload-{name}.service"
+    _transient_unit_cleanup(unit)
     need_root()
     mans = load_manifests()
     m = mans.get(name, {})
