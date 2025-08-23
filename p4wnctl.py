@@ -43,9 +43,16 @@ SERVICE_UNITS = [
 # Defaults for gadget network and MSD
 USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
 USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
-USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")   # configurable, no hardcoding in payloads
+USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")
 MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
 MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "64"))
+
+# Presets for the TUI selector
+USB_CHOICES = [
+    ("HID + NET", "hid_net_only"),
+    ("HID + NET + MSD", "hid_storage_net"),
+    ("Storage Only", "storage_only"),
+]
 
 # ======= Small helpers =======
 def sh(cmd: str, check=True) -> subprocess.CompletedProcess:
@@ -105,7 +112,7 @@ def primary_iface(order=("usb0", "eth0", "wlan0")) -> str | None:
             return k
     return None
 
-def primary_ip(order=("wlan0", "usb0", "eth0")) -> str | None:
+def primary_ip(order=("usb0", "eth0", "wlan0")) -> str | None:
     mapping = ips_by_iface()
     for want in order:
         if want in mapping and mapping[want]:
@@ -116,7 +123,6 @@ def primary_ip(order=("wlan0", "usb0", "eth0")) -> str | None:
     for v in mapping.values():
         if v:
             return v[0]
-    # default-route trick
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("10.255.255.255", 1))
@@ -165,9 +171,8 @@ def svc_status_text(unit: str) -> str:
     enabled = systemctl("is-enabled", unit).stdout.strip() or "unknown"
     return f"{unit}: {active} ({enabled})"
 
-# ======= USB (Python gadget builder, no .sh) =======
+# ======= USB (configfs builder, no legacy g_* modules) =======
 def usb_unbind_all():
-    """Unbind any configfs gadgets so UDC is free."""
     base = Path("/sys/kernel/config/usb_gadget")
     for g in base.iterdir():
         if not g.is_dir(): continue
@@ -177,15 +182,12 @@ def usb_unbind_all():
             except Exception: pass
 
 def usb_unload_legacy():
-    """Unload monolithic gadget modules which conflict with configfs."""
     for mod in ["g_hid","g_ether","g_serial","g_mass_storage","g_multi","g_acm"]:
         sh(f"rmmod {mod}", check=False)
 
 def usb_force_reset():
-    """Free the controller before applying a new mode."""
     need_root()
     usb_preflight()
-    # stop getty on USB-serial if present
     systemctl("stop", "serial-getty@ttyGS0.service")
     usb_unbind_all()
     usb_unload_legacy()
@@ -198,12 +200,11 @@ def usb_preflight():
     uds = Path("/sys/class/udc")
     if not uds.exists() or not any(uds.iterdir()):
         print("[!] No USB Device Controller under /sys/class/udc.\n"
-              "    Add 'dtoverlay=dwc2' to /boot/config.txt (or /boot/firmware/config.txt) and reboot.",
+              "    Add 'dtoverlay=dwc2' to /boot/config.txt and reboot.",
               file=sys.stderr)
         sys.exit(3)
 
 def _hid_report_desc_bytes() -> bytes:
-    # Keyboard report descriptor (8 bytes)
     return bytes([
         0x05,0x01, 0x09,0x06, 0xA1,0x01, 0x05,0x07,
         0x19,0xE0, 0x29,0xE7, 0x15,0x00, 0x25,0x01,
@@ -246,14 +247,12 @@ def usb_unbind():
     if USB_GADGET.exists():
         udc = USB_GADGET / "UDC"
         try:
-            # Writing empty string unbinds
             udc.write_text("")
         except Exception:
             pass
 
 def usb_teardown():
     usb_unbind()
-    # remove functions/configs under gadget (but keep gadget folder)
     for sub in ("functions", "configs"):
         base = USB_GADGET / sub
         if not base.exists(): continue
@@ -277,16 +276,14 @@ def _bind_first_udc():
 
 def _gadget_common_init():
     USB_GADGET.mkdir(parents=True, exist_ok=True)
-    _write(USB_GADGET / "idVendor", "0x1d6b")   # Linux Foundation (example)
-    _write(USB_GADGET / "idProduct", "0x0104")  # Multifunction Composite Gadget (example)
+    _write(USB_GADGET / "idVendor", "0x1d6b")
+    _write(USB_GADGET / "idProduct", "0x0104")
     _write(USB_GADGET / "bcdDevice", "0x0100")
     _write(USB_GADGET / "bcdUSB", "0x0200")
-
     s = USB_GADGET / "strings/0x409"
     _write(s / "serialnumber", "P4wnP1-O2")
     _write(s / "manufacturer", "quasialex")
     _write(s / "product", "P4wnP1-O2 Gadget")
-
     cfg = USB_GADGET / "configs/c.1"
     _write(cfg / "MaxPower", "250")
     _write(USB_GADGET / "configs/c.1/strings/0x409/configuration", "Config 1")
@@ -312,7 +309,6 @@ def _func_rndis():
     f.mkdir(parents=True, exist_ok=True)
     _write(f / "dev_addr", USB_NET_DEVADDR)
     _write(f / "host_addr", USB_NET_HOSTADDR)
-    # Optional OS descriptors could be added here if needed.
     return f
 
 def _func_msd():
@@ -325,13 +321,17 @@ def _func_msd():
     _write(f / "lun.0/file", str(MSD_IMAGE))
     return f
 
+def _func_acm():
+    f = USB_GADGET / "functions/acm.usb0"
+    f.mkdir(parents=True, exist_ok=True)
+    return f
+
 def _link(f: Path, cfg: Path):
     ln = cfg / f.name
     if not ln.exists():
         ln.symlink_to(f)
 
 def _ensure_usb0_ip():
-    # Assign a default CIDR if usb0 exists and has no IP; make it configurable
     ip_bin = which("ip") or "/sbin/ip"
     q = sh(f"{ip_bin} -4 addr show usb0", check=False).stdout
     has_ip = "inet " in (q or "")
@@ -340,56 +340,72 @@ def _ensure_usb0_ip():
         sh(f"{ip_bin} link set usb0 up 2>/dev/null || true", check=False)
 
 def usb_apply_mode(mode: str) -> int:
-    """
-    Build/replace gadget in pure Python.
-    Modes:
-      - hid_net_only        (HID + ECM + RNDIS)
-      - hid_storage_net     (HID + ECM + RNDIS + MSD)
-      - storage_only        (MSD only)
-    """
     need_root()
     usb_preflight()
     _gadget_common_init()
     cfg = USB_GADGET / "configs/c.1"
-
-    # unbind and teardown any existing functions/links
     usb_teardown()
-
-    # Re-init base after teardown
     _gadget_common_init()
 
     if mode == "hid_net_only":
-        f_hid = _func_hid()
-        f_ecm = _func_ecm()
-        f_rnd = _func_rndis()
-        _link(f_hid, cfg)
-        _link(f_ecm, cfg)
-        _link(f_rnd, cfg)
+        _link(_func_hid(), cfg)
+        _link(_func_ecm(), cfg)
+        _link(_func_rndis(), cfg)
     elif mode == "hid_storage_net":
-        f_hid = _func_hid()
-        f_ecm = _func_ecm()
-        f_rnd = _func_rndis()
-        f_msd = _func_msd()
-        _link(f_hid, cfg)
-        _link(f_ecm, cfg)
-        _link(f_rnd, cfg)
-        _link(f_msd, cfg)
+        _link(_func_hid(), cfg)
+        _link(_func_ecm(), cfg)
+        _link(_func_rndis(), cfg)
+        _link(_func_msd(), cfg)
     elif mode == "storage_only":
-        f_msd = _func_msd()
-        _link(f_msd, cfg)
+        _link(_func_msd(), cfg)
     else:
         print(f"Unknown mode: {mode}", file=sys.stderr)
         return 4
 
-    # bind
     try:
         _bind_first_udc()
     except Exception as e:
         print(f"Bind failed: {e}", file=sys.stderr)
         return 6
 
-    # Make sure usb0 shows up with a usable IP (configurable)
     _ensure_usb0_ip()
+    return 0
+
+def usb_caps_now() -> dict:
+    funcs = USB_GADGET / "functions"
+    def ex(n): return (funcs / n).exists()
+    return {
+        "hid": ex("hid.usb0"),
+        "net": ex("ecm.usb0") or ex("rndis.usb0"),
+        "msd": ex("mass_storage.usb0"),
+        "acm": ex("acm.usb0"),
+    }
+
+def usb_compose_apply(hid: bool, net: bool, msd: bool, acm: bool = False) -> int:
+    """
+    Build gadget with requested functions. Extends presets without new shell scripts.
+    """
+    need_root()
+    usb_preflight()
+    usb_force_reset()
+    usb_teardown()
+    _gadget_common_init()
+    cfg = USB_GADGET / "configs/c.1"
+
+    if hid: _link(_func_hid(), cfg)
+    if net:
+        _link(_func_ecm(), cfg)
+        _link(_func_rndis(), cfg)
+    if msd: _link(_func_msd(), cfg)
+    if acm: _link(_func_acm(), cfg)
+
+    try:
+        _bind_first_udc()
+    except Exception as e:
+        print(f"Bind failed: {e}", file=sys.stderr); return 6
+
+    _ensure_usb0_ip()
+    print(usb_status_text())
     return 0
 
 def usb_status_text() -> str:
@@ -410,6 +426,7 @@ def usb_status_text() -> str:
     rndis = (funcs / "rndis.usb0").exists()
     ecm   = (funcs / "ecm.usb0").exists()
     msd   = (funcs / "mass_storage.usb0").exists()
+    acm   = (funcs / "acm.usb0").exists()
 
     if msd and (hid and (rndis or ecm)):
         mode = "hid_storage_net"
@@ -424,12 +441,13 @@ def usb_status_text() -> str:
     if hid: parts.append("HID")
     if rndis or ecm: parts.append("NET")
     if msd: parts.append("MSD")
+    if acm: parts.append("SER")
     lines = [f"USB: {mode} ({'+'.join(parts) if parts else 'none'})"]
     for c in ["c.1", "c.2"]:
         cdir = USB_GADGET / "configs" / c
         if cdir.exists():
             links = []
-            for name in ["hid.usb0","rndis.usb0","ecm.usb0","mass_storage.usb0"]:
+            for name in ["hid.usb0","rndis.usb0","ecm.usb0","mass_storage.usb0","acm.usb0"]:
                 if (cdir / name).exists(): links.append(name.split(".")[0])
             lines.append(f" {c}: {('+'.join(links) if links else 'n/a')}")
     return "\n".join(lines)
@@ -438,40 +456,25 @@ def usb_status(_args=None) -> int:
     print(usb_status_text()); return 0
 
 def usb_set(mode: str) -> int:
-    """
-    Apply gadget mode using the internal Python builder.
-    Modes:
-      - hid_net_only
-      - hid_storage_net
-      - storage_only
-    """
     need_root()
     usb_preflight()
-
-    # Free the controller & remove any legacy/monolithic gadgets first
-    usb_force_reset()   # unbind & rmmod conflicting g_* modules
-    usb_teardown()      # remove old functions/links under /sys/kernel/config/usb_gadget/p4wnp1
-
-    # Build and bind the requested mode
+    usb_force_reset()
+    usb_teardown()
     rc = usb_apply_mode(mode)
     if rc != 0:
         return rc
-
-    # Post-check & helpful status
     try:
         udc = (USB_GADGET / "UDC").read_text().strip()
         if not udc:
             print("[!] Gadget not bound to any UDC (still empty).", file=sys.stderr)
     except Exception:
         pass
-
     print(usb_status_text())
     return 0
 
-# ======= Payload discovery / manifests (JSON+YAML) =======
-# Optional YAML support
+# ======= Payload discovery / manifests =======
 try:
-    import yaml  # pip install pyyaml
+    import yaml  # optional
 except Exception:
     yaml = None
 
@@ -495,21 +498,10 @@ def _read_manifest(path: Path) -> dict | None:
     return None
 
 def load_manifests() -> dict[str, dict]:
-    """
-    Manifest fields (choose ONE of 'cmd' | 'bin' | 'script'):
-      name:         str (required)
-      summary:      str
-      group:        str
-      usage:        [str, ...]
-      requirements: [str, ...]
-      risks:        [str, ...]
-      estimated_runtime: "..."
-      cmd | bin | script + args/env/working_dir/harden/preflight  (same as before)
-    """
     out = {}
     for p in _manifest_files():
         m = _read_manifest(p)
-        if not isinstance(m, dict): 
+        if not isinstance(m, dict):
             continue
         name = str(m.get("name", "")).strip() or p.stem
         if "script" in m and m["script"]:
@@ -599,15 +591,19 @@ def payload_start(name: str) -> int:
         if sp:
             script = str(sp)
         else:
-            print(f"No manifest or Python payload found for '{name}'. "
+            print(f"No manifest or payload found for '{name}'. "
                   f"Add payloads/manifests/{name}.json|.yml or {name}.py.", file=sys.stderr)
             return 1
 
-    # Always inject P4WN_LHOST (dynamic)
+    # Dynamic env
     lhost = primary_ip()
     if lhost:
         env = dict(env or {})
         env.setdefault("P4WN_LHOST", lhost)
+    iface = primary_iface()
+    if iface:
+        env = dict(env or {})
+        env.setdefault("P4WN_NET_IFACE", iface)
 
     rc = _run_preflight(env, wdir, pre)
     if rc != 0:
@@ -716,7 +712,7 @@ def payload_list(group: str | None = None) -> int:
     for n in names:
         m = mans.get(n)
         g = (m or {}).get("group")
-        if group and g != group: 
+        if group and g != group:
             continue
         summ = (m or {}).get("summary", "")
         print(n if not summ else f"{n} - {summ}")
@@ -759,6 +755,77 @@ def payload_describe(name: str) -> int:
 def get_payload_choices():
     names = list_payload_names()
     return [(n, n) for n in names]
+
+# ======= "Run Now" (requirements-aware) =======
+REQ_OVERRIDES = {
+    # HID
+    "reverse_inmemory": ["hid"],
+    "reverse_http_fetch": ["hid"],
+    "usb_stealer": ["hid"],
+    "domain_enum_hid": ["hid"],
+    "lockpicker": ["hid"],
+    "test_typing": ["hid"],
+    # Network
+    "rogue_dhcp_dns": ["net"],
+    "dns_spoof_redirect": ["net"],
+    "responder_attack": ["net"],
+    "credsnarf_spoof": ["net"],
+    "reverse_shell_listener": ["net"],
+    # Shell/admin
+    "start_tmux_shell": ["net", "tmux"],
+    "reverse_to_host": ["serial"],
+    "hid_backdoor": ["net"],
+}
+
+def _infer_group_from_path(name: str) -> str | None:
+    sp = find_python_script(name)
+    if not sp:
+        return None
+    p = str(sp)
+    if "/payloads/hid/" in p: return "hid"
+    if "/payloads/network/" in p: return "network"
+    if "/payloads/shell/" in p: return "shell"
+    if "/payloads/listeners/" in p: return "listeners"
+    return None
+
+def payload_requirements_for(name: str) -> list[str]:
+    m = load_manifests().get(name, {})
+    if "requirements" in m and isinstance(m["requirements"], list):
+        return list(m["requirements"])
+    if name in REQ_OVERRIDES:
+        return REQ_OVERRIDES[name]
+    g = _infer_group_from_path(name)
+    if g == "hid": return ["hid"]
+    if g == "network": return ["net"]
+    if g == "shell": return []
+    return []
+
+def ensure_for_requirements(reqs: list[str]) -> int:
+    want_hid = "hid" in reqs
+    want_net = "net" in reqs
+    want_msd = "msd" in reqs
+    want_acm = "serial" in reqs
+    rc = usb_compose_apply(want_hid, want_net, want_msd, want_acm)
+    # tmux check is best-effort; don't fail if absent
+    if "tmux" in reqs:
+        if not which("tmux"):
+            print("[!] tmux not found; install tmux for best results.", file=sys.stderr)
+    return rc
+
+def payload_run_now(name: str) -> int:
+    """
+    Ensure required modes (HID/NET/MSD/Serial), then start payload.
+    'active' uses the legacy ACTIVE_PAYLOAD_FILE pointer.
+    """
+    if name in ("", "active"):
+        if not ACTIVE_PAYLOAD_FILE.exists():
+            print("No active payload set.", file=sys.stderr); return 2
+        name = Path(ACTIVE_PAYLOAD_FILE.read_text().strip()).stem
+    reqs = payload_requirements_for(name)
+    rc = ensure_for_requirements(reqs)
+    if rc != 0:
+        return rc
+    return payload_start(name)
 
 # ======= Web UI =======
 def web_status_text() -> str:
@@ -837,7 +904,6 @@ def web_url() -> int:
     return 0
 
 def _web_bind_choices():
-    # dynamic first choice is always the current primary ip
     cur = primary_ip() or "0.0.0.0"
     return [
         (f"{cur}:8080", (cur, 8080)),
@@ -871,10 +937,10 @@ def ip_text() -> str:
 
     def rank(iface: str) -> tuple:
         name = iface.lower()
-        if is_usb(iface):               pri = 0
+        if is_usb(iface): pri = 0
         elif name.startswith(("eth","en")): pri = 1
-        elif name.startswith("wlan"):   pri = 2
-        else:                           pri = 3
+        elif name.startswith("wlan"): pri = 2
+        else: pri = 3
         return (pri, name)
 
     ifaces.sort(key=rank)
@@ -893,7 +959,6 @@ def ip_text() -> str:
                         ipline = parts[1]
                         break
         lines.append(f"{iface} ({state}): {ipline if ipline else 'no ip'}")
-    # Add an extra line indicating primary IP
     prim = primary_ip()
     if prim:
         lines.append(f"primary: {prim}")
@@ -934,7 +999,7 @@ P4wnP1-O2 control CLI
 
 Subcommands:
   usb         USB gadget controls
-  payload     Payload controls (list/set + start/stop/status/logs/describe)
+  payload     Payload controls (list/set + start/stop/status/logs/describe/run-now)
   web         Web UI controls (port/host, start/stop, enable/disable, url)
   service     Manage systemd units (install/uninstall/start/stop/...)
   ip          Show IPs (also: ip primary | ip env | ip json)
@@ -948,6 +1013,7 @@ USB gadget controls
 Commands:
   usb status
   usb set {hid_net_only|hid_storage_net|storage_only}
+  usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1]
 """)
 
 PAYLOAD_HELP = dedent("""\
@@ -960,17 +1026,10 @@ Commands:
   payload status all         # transient runner states for all discovered payloads
   payload status <name>
   payload start <name>       # runs using manifest (cmd|bin|script)
+  payload run-now <name|active>   # ensure USB/WiFi prereqs, then start
   payload stop <name>
   payload logs <name>
-  payload describe <name>    # explain payload (from manifest .json/.yml)
-
-Manifests:
-  payloads/manifests/<name>.json or .yml — choose ONE of:
-    { "name": "foo", "cmd":  "<shell string with ${ENV} if you like>" }
-    { "name": "foo", "bin":  "program", "args": ["--flags","..."] }
-    { "name": "foo", "script":"payloads/path/to/foo.py", "args": [] }
-  Optional: "env": { "KEY":"VAL" }, "working_dir": "/opt/p4wnp1", "harden": true,
-            "preflight": ["command -v program >/dev/null || exit 127"]
+  payload describe <name>
 """)
 
 WEB_HELP = dedent(f"""\
@@ -983,11 +1042,6 @@ Commands:
   web config show
   web config set --host <ip|auto> --port <n>
   web url
-
-Notes:
-  • Config writes systemd override at:
-    {WEBUI_OVERRIDE_FILE}
-  • Flask app should read WEBUI_HOST / WEBUI_PORT env vars.
 """)
 
 SERVICE_HELP = dedent("""\
@@ -1081,7 +1135,6 @@ def tui_menu(stdscr):
         MenuItem("Status (all)", "action", data={"fn": lambda: payload_status_all()}),
         *[MenuItem(f"Start: {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_start(v))[1])}) for lab, val in payload_choices[:5]],
         *[MenuItem(f"Stop:  {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_stop(v))[1])}) for lab, val in payload_choices[:5]],
-        # Tip: a future "Describe selected" could show manifest summary of the current selection
     ])
 
     web_sub = MenuState("Web UI", [
@@ -1175,7 +1228,7 @@ def tui_menu(stdscr):
         elif k in (ord('q'),):
             return
 
-# ======= CLI parsing / behavior (no argparse; OLED-friendly) =======
+# ======= CLI parsing =======
 def main() -> int:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
         print(MAIN_HELP.rstrip()); return 0
@@ -1192,6 +1245,23 @@ def main() -> int:
             if len(sys.argv) < 4:
                 print(USB_HELP.rstrip()); return 1
             return usb_set(sys.argv[3])
+        if sub == "compose":
+            # Usage: p4wnctl usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1]
+            def pbool(name):
+                for a in sys.argv[3:]:
+                    if a.startswith(f"--{name}="):
+                        v = a.split("=",1)[1].strip().lower()
+                        if v in ("1","true","on","yes"):  return True
+                        if v in ("0","false","off","no"): return False
+                return None
+            caps = usb_caps_now()
+            hid = pbool("hid"); net = pbool("net"); msd = pbool("msd"); acm = pbool("acm")
+            return usb_compose_apply(
+                caps["hid"] if hid is None else hid,
+                caps["net"] if net is None else net,
+                caps["msd"] if msd is None else msd,
+                caps["acm"] if acm is None else acm
+            )
         print(USB_HELP.rstrip()); return 1
 
     # payload
@@ -1212,6 +1282,9 @@ def main() -> int:
         if sub == "start":
             if len(sys.argv) < 4: print("usage: p4wnctl payload start <name>"); return 1
             return payload_start(sys.argv[3])
+        if sub == "run-now":
+            nm = sys.argv[3] if len(sys.argv) >= 4 else "active"
+            return payload_run_now(nm)
         if sub == "stop":
             if len(sys.argv) < 4: print("usage: p4wnctl payload stop <name>"); return 1
             return payload_stop(sys.argv[3])
@@ -1291,7 +1364,7 @@ def main() -> int:
             return template_render(sys.argv[3])
         print("usage: p4wnctl template render <file>"); return 1
 
-    # menu (with fallback)
+    # menu
     if cmd == "menu":
         try:
             curses.wrapper(tui_menu)

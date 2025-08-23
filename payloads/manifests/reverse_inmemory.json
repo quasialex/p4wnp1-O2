@@ -1,0 +1,9 @@
+{
+  "name": "reverse_inmemory",
+  "group": "hid",
+  "summary": "PowerShell in-memory reverse shell",
+  "requirements": ["hid", "net", "iface:usb0"],
+  "script": "payloads/hid/reverse_inmemory.py",
+  "env": {},
+  "preflight": ["command -v tmux >/dev/null || true"]
+}

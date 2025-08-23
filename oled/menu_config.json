@@ -2,97 +2,103 @@
   {
     "name": "Status",
     "submenu": [
-      { "name": "USB",         "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
-      { "name": "Payload",     "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
-      { "name": "Web",      "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
-      { "name": "IP",          "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" }
+      { "name": "USB",     "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
+      { "name": "Payload", "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
+      { "name": "Web",     "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
+      { "name": "IP",      "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" }
     ]
   },
+
   {
     "name": "USB Mode",
     "submenu": [
-      { "name": "HID + NET",        "action": "{P4WN_HOME}/p4wnctl.py usb set hid_net_only" },
-      { "name": "HID + NET + MSD",  "action": "{P4WN_HOME}/p4wnctl.py usb set hid_storage_net" },
-      { "name": "Storage Only",     "action": "{P4WN_HOME}/p4wnctl.py usb set storage_only" }
+      {
+        "name": "Quick Presets",
+        "submenu": [
+          { "name": "HID + NET",        "action": "{P4WN_HOME}/p4wnctl.py usb set hid_net_only" },
+          { "name": "HID + NET + MSD",  "action": "{P4WN_HOME}/p4wnctl.py usb set hid_storage_net" },
+          { "name": "Storage",     "action": "{P4WN_HOME}/p4wnctl.py usb set storage_only" }
+        ]
+      },
+      {
+        "name": "Functions",
+        "submenu": [
+          { "name": "Show Current", "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
+          { "name": "Toggle HID", "action": "oled://usb_compose?hid=toggle" },
+          { "name": "Toggle NET", "action": "oled://usb_compose?net=toggle" },
+          { "name": "Toggle MSD", "action": "oled://usb_compose?msd=toggle" }
+        ]
+      }
     ]
   },
+
+  {
+    "name": "Network",
+    "submenu": [
+      { "name": "Set IF usb0",  "action": "oled://config?net_iface=usb0" },
+      { "name": "Set IF eth0",  "action": "oled://config?net_iface=eth0" },
+      { "name": "Set IF wlan0", "action": "oled://config?net_iface=wlan0" }
+    ]
+  },
+
   {
     "name": "Payloads",
     "submenu": [
-      { "name": "reverse_shell",       "action": "{P4WN_HOME}/p4wnctl.py payload set reverse_shell" },
-      { "name": "autorun_powershell",  "action": "{P4WN_HOME}/p4wnctl.py payload set autorun_powershell" },
-      { "name": "test_typing",         "action": "{P4WN_HOME}/p4wnctl.py payload set test_typing" }
-    ]
-  },
-  {
-    "name": "Web UI",
-    "submenu": [
-      { "name": "Show URL", "action": "{P4WN_HOME}/p4wnctl.py web url" },
-      { "name": "Bind (Host:Port)",
-    	"submenu": [
-            { "name": "AUTO (primary):8080", "action": "{P4WN_HOME}/p4wnctl.py web config set --host auto --port 8080" },
-            { "name": "0.0.0.0:8080",        "action": "{P4WN_HOME}/p4wnctl.py web config set --host 0.0.0.0 --port 8080" },
-            { "name": "0.0.0.0:9090",        "action": "{P4WN_HOME}/p4wnctl.py web config set --host 0.0.0.0 --port 9090" },
-            { "name": "127.0.0.1:8000",      "action": "{P4WN_HOME}/p4wnctl.py web config set --host 127.0.0.1 --port 8000" },
-            { "name": "127.0.0.1:8080",      "action": "{P4WN_HOME}/p4wnctl.py web config set --host 127.0.0.1 --port 8080" }
-          ]
+      { "name": "Run Now [Active]", "action": "{P4WN_HOME}/p4wnctl.py payload run-now active" },
+
+      { "name": "HID",
+        "submenu": [
+          { "name": "PWSH InMemory", "action": "{P4WN_HOME}/p4wnctl.py payload run-now reverse_inmemory" },
+          { "name": "PWSH HTTP",     "action": "{P4WN_HOME}/p4wnctl.py payload run-now reverse_http_fetch" },
+          { "name": "USB Stealer",          "action": "{P4WN_HOME}/p4wnctl.py payload run-now usb_stealer" },
+          { "name": "Domain Enumerator",    "action": "{P4WN_HOME}/p4wnctl.py payload run-now domain_enum_hid" },
+          { "name": "Lockpicker",           "action": "{P4WN_HOME}/p4wnctl.py payload run-now lockpicker" },
+          { "name": "Test Typing",          "action": "{P4WN_HOME}/p4wnctl.py payload run-now test_typing" }
+        ]
       },
-      { "name": "Start",    "action": "{P4WN_HOME}/p4wnctl.py web start" },
-      { "name": "Stop",     "action": "{P4WN_HOME}/p4wnctl.py web stop" },
-      { "name": "Restart",  "action": "{P4WN_HOME}/p4wnctl.py web restart" },
-      { "name": "Enable",   "action": "{P4WN_HOME}/p4wnctl.py web enable" },
-      { "name": "Disable",  "action": "{P4WN_HOME}/p4wnctl.py web disable" }
+
+      { "name": "Network",
+        "submenu": [
+          { "name": "Rogue DHCP + DNS",         "action": "{P4WN_HOME}/p4wnctl.py payload run-now rogue_dhcp_dns" },
+          { "name": "DNS Spoof & Redirect",     "action": "{P4WN_HOME}/p4wnctl.py payload run-now dns_spoof_redirect" },
+          { "name": "Responder Attack",         "action": "{P4WN_HOME}/p4wnctl.py payload run-now responder_attack" },
+          { "name": "Credential Snarf + Spoof", "action": "{P4WN_HOME}/p4wnctl.py payload run-now credsnarf_spoof" }
+        ]
+      },
+
+      { "name": "Storage", "submenu": [ { "name": "(add storage payloads here)", "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" } ] },
+      { "name": "WiFi",    "submenu": [ { "name": "(add wifi payloads here)",    "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" } ] }
     ]
   },
-  {
-    "name": "HID Attacks",
-    "submenu": [
-      { "name": "PSH Reverse InMemory",     "script": "{P4WN_HOME}/payloads/hid/reverse_inmemory.py" },
-      { "name": "PSH Reverse HTTP", 	    "script": "{P4WN_HOME}/payloads/hid/reverse_http_fetch.py" },
-      { "name": "USB Stealer",              "script": "{P4WN_HOME}/payloads/hid/usb_stealer.py" },
-      { "name": "Domain Enumerator",        "script": "{P4WN_HOME}/payloads/hid/domain_enum_hid.py" },
-      { "name": "Lockpicker",               "script": "{P4WN_HOME}/payloads/hid/lockpicker.py" },
-      { "name": "Test Typing",              "script": "{P4WN_HOME}/payloads/hid/test_typing.py" }
-    ]
-  },
-  {
-    "name": "Network Attacks",
-    "submenu": [
-      { "name": "Rogue DHCP + DNS",         "script": "{P4WN_HOME}/payloads/network/rogue_dhcp_dns.py" },
-      { "name": "DNS Spoof & Redirect",     "script": "{P4WN_HOME}/payloads/network/dns_spoof_redirect.py" },
-      { "name": "Responder Attack",         "script": "{P4WN_HOME}/payloads/network/responder_attack.py" },
-      { "name": "Credential Snarf + Spoof", "script": "{P4WN_HOME}/payloads/network/credsnarf_spoof.py" }
-    ]
-  },
-  {
-    "name": "Listeners",
-    "submenu": [
-      { "name": "HID Backdoor Listener",  "script": "{P4WN_HOME}/payloads/listeners/hid_backdoor.py" },
-      { "name": "Reverse Shell: Start 4444", "script": "{P4WN_HOME}/payloads/listeners/reverse_shell_listener.py", "background": true },
-      { "name": "Reverse Shell: Stop", "action": "bash -lc \"tmux kill-session -t p4wnp1_rshell || systemctl stop p4wnp1-rshell || pkill -f 'nc -lvnp 4444'\"", "background": true }
-    ]
-  },
+
   {
     "name": "Shell Access",
     "submenu": [
-      { "name": "Start Serial Shell",              "script": "{P4WN_HOME}/payloads/shell/reverse_to_host.py" },
-      { "name": "Stop Serial Shell",               "action": "systemctl stop serial-getty@ttyGS0.service" },
-      { "name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.py" },
-      { "name": "Stop Tmux Shell",                 "action": "pkill -f 'tmux -S /tmp/p4wnp1_shell'" }
+      { "name": "Serial Console (host)",       "action": "systemctl start serial-getty@ttyGS0.service" },
+      { "name": "Stop Serial Console",         "action": "systemctl stop serial-getty@ttyGS0.service" },
+      { "name": "Tmux Shell (USB-Ethernet)",   "action": "{P4WN_HOME}/p4wnctl.py payload run-now start_tmux_shell" },
+      { "name": "Stop Tmux Shell",             "action": "pkill -f 'tmux -S /tmp/p4wnp1_shell'" },
+
+      { "name": "Reverse Shell: Start 4444",   "action": "{P4WN_HOME}/p4wnctl.py payload run-now reverse_shell_listener" },
+      { "name": "Reverse Shell: Stop",         "action": "bash -lc \"tmux kill-session -t p4wnp1_rshell || systemctl stop p4wnp1-rshell || pkill -f 'nc -lvnp 4444'\"", "background": true },
+
+      { "name": "Web UI URL",                  "action": "{P4WN_HOME}/p4wnctl.py web url" }
     ]
   },
+
   {
     "title": "Services",
     "submenu": [
       { "title": "USB: Status",     "action": "{P4WN_HOME}/p4wnctl.py service status p4wnp1.service" },
       { "title": "USB: Restart",    "action": "{P4WN_HOME}/p4wnctl.py service restart p4wnp1.service" },
-      { "title": "OLED: Install",   "action": "{P4WN_HOME}/p4wnctl.py service install oledmenu.service" },
-      { "title": "OLED: Uninstall", "action": "{P4WN_HOME}/p4wnctl.py service uninstall oledmenu.service" },
-      { "title": "OLED: Restart",   "action": "{P4WN_HOME}/p4wnctl.py service restart oledmenu.service" },
       { "title": "Web: Status",     "action": "{P4WN_HOME}/p4wnctl.py service status p4wnp1-webui.service" },
-      { "title": "Web: Restart",    "action": "{P4WN_HOME}/p4wnctl.py service restart p4wnp1-webui.service" }
+      { "title": "Web: Restart",    "action": "{P4WN_HOME}/p4wnctl.py service restart p4wnp1-webui.service" },
+      { "title": "OLED: Restart",   "action": "{P4WN_HOME}/p4wnctl.py service restart oledmenu.service" },
+      { "title": "OLED: Install",   "action": "{P4WN_HOME}/p4wnctl.py service install oledmenu.service" },
+      { "title": "OLED: Uninstall", "action": "{P4WN_HOME}/p4wnctl.py service uninstall oledmenu.service" }
     ]
   },
+
   {
     "name": "System",
     "submenu": [
@@ -101,4 +107,3 @@
     ]
   }
 ]
-

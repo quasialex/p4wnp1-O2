@@ -1,0 +1,7 @@
+{
+  "name": "rogue_dhcp_dns",
+  "group": "network",
+  "summary": "Rogue DHCP and DNS spoof",
+  "requirements": ["net", "iface:usb0"],
+  "script": "payloads/network/rogue_dhcp_dns.py"
+}
