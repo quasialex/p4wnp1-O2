@@ -2,14 +2,14 @@
   {
     "name": "Status",
     "submenu": [
-      { "name": "USB:",         "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
-      { "name": "Payload:",     "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
-      { "name": "Web UI:",      "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
-      { "name": "IP:",          "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" }
+      { "name": "USB",         "status_cmd": "{P4WN_HOME}/p4wnctl.py usb status" },
+      { "name": "Payload",     "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
+      { "name": "Web",      "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
+      { "name": "IP",          "status_cmd": "{P4WN_HOME}/p4wnctl.py ip" }
     ]
   },
   {
-    "name": "USB Mode", "header_prefix": "Active: ", "header_cmd": "{P4WN_HOME}/p4wnctl.py usb status",
+    "name": "USB Mode",
     "submenu": [
       { "name": "HID + NET",        "action": "{P4WN_HOME}/p4wnctl.py usb set hid_net_only" },
       { "name": "HID + NET + MSD",  "action": "{P4WN_HOME}/p4wnctl.py usb set hid_storage_net" },
@@ -19,7 +19,6 @@
   {
     "name": "Payloads",
     "submenu": [
-      { "name": "Current:", "status_cmd": "{P4WN_HOME}/p4wnctl.py payload status" },
       { "name": "reverse_shell",       "action": "{P4WN_HOME}/p4wnctl.py payload set reverse_shell" },
       { "name": "autorun_powershell",  "action": "{P4WN_HOME}/p4wnctl.py payload set autorun_powershell" },
       { "name": "test_typing",         "action": "{P4WN_HOME}/p4wnctl.py payload set test_typing" }
@@ -28,7 +27,6 @@
   {
     "name": "Web UI",
     "submenu": [
-      { "name": "Status:",  "status_cmd": "{P4WN_HOME}/p4wnctl.py web status" },
       { "name": "Show URL", "action": "{P4WN_HOME}/p4wnctl.py web url" },
       { "name": "Bind (Host:Port)",
     	"submenu": [
@@ -82,10 +80,6 @@
       { "name": "Start Tmux Shell (USB-Ethernet)", "script": "{P4WN_HOME}/payloads/shell/start_tmux_shell.py" },
       { "name": "Stop Tmux Shell",                 "action": "pkill -f 'tmux -S /tmp/p4wnp1_shell'" }
     ]
-  },
-  {
-    "name": "Mass Storage",
-    "script": "{P4WN_HOME}/payloads/mass_storage.py"
   },
   {
     "title": "Services",

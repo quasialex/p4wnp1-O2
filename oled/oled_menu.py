@@ -5,13 +5,13 @@
 #   ROT=0 (0°):    KEY1=Select, KEY2=Back, KEY3=Rotate(long), KEY3 short = selector cycle
 # Joystick: up/down only. **Flipped when ROT=0** so UP always feels like UP.
 
-import json, subprocess, os, sys, time, traceback
-import shlex, signal, shutil
+import json, subprocess, os, sys, time, traceback, shutil
+import shlex, signal
 from pathlib import Path
 from textwrap import wrap
 
 import RPi.GPIO as GPIO
-from PIL import ImageFont
+from PIL import Image, ImageFont
 from luma.core.interface.serial import spi
 from luma.core.render import canvas
 from luma.oled.device import sh1106, ssd1306
@@ -20,10 +20,15 @@ from luma.oled.device import sh1106, ssd1306
 P4WN_HOME    = os.getenv("P4WN_HOME", "/opt/p4wnp1")
 MENU_CONFIG  = Path(P4WN_HOME) / "oled" / "menu_config.json"
 ROT_FILE     = Path(P4WN_HOME) / "oled" / "rotation.json"
+SAVER_IMAGE  = Path(P4WN_HOME) / "oled" / "saver.png"   # <- place your logo here
 LOG_DIR      = Path(P4WN_HOME) / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-IDLE_TIMEOUT_S   = 10.0
+# Idle behavior
+SAVER_SHOW_AFTER_S = 8.0   # show logo after this much idle
+SAVER_POWER_OFF_S  = 25.0   # turn screen fully off after this much idle
+SAVER_PEEK_S       = 0.5    # how long to show logo when pressing Back at top
+
 TOAST_TIME       = 2.0
 DEBOUNCE         = 0.12
 RELEASE_WAIT     = 0.40
@@ -41,17 +46,12 @@ OLED_CTRL     = "sh1106"    # sh1106 | ssd1306
 # Joystick (5-way) — use only UP/DOWN
 JOY_UP, JOY_DOWN, JOY_LEFT, JOY_RIGHT, JOY_CENTER = 6, 19, 5, 26, 13
 # Right-side keys (adjust if your HAT revision differs)
-# Mapping is rotation-aware in read_event()
 KEY1, KEY2, KEY3 = 21, 20, 16
 
 GPIO.setwarnings(False)
 GPIO.setmode(GPIO.BCM)
 for p in (JOY_UP, JOY_DOWN, JOY_LEFT, JOY_RIGHT, JOY_CENTER, KEY1, KEY2, KEY3):
     GPIO.setup(p, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-# --- Dynamic header (lightweight) ---
-HEADER_TTL = 1.0  # seconds to cache command output to avoid thrashing
-_header_cache = {}  # {(cmd:str): (ts:float, lastline:str)}
 
 # ---------- OLED init / rotation ----------
 def _load_rotation():
@@ -82,9 +82,8 @@ def _init_device():
 
 DEVICE = _init_device()
 
-# ---------- Font / layout (smaller if possible) ----------
+# ---------- Font / layout ----------
 def _load_font():
-    # Try tiny monospace TTF for more columns; fallback to PIL bitmap
     candidates = [
         ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 9),
         ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 8),
@@ -101,7 +100,6 @@ def _load_font():
             return f, max(lh, 8), max(cw, 5)
         except Exception:
             pass
-    # Fallback bitmap font
     f = ImageFont.load_default()
     try:
         lh = f.getbbox("Ag")[3] - f.getbbox("Ag")[1]
@@ -131,31 +129,6 @@ def read_status_lines(cmd: str, timeout: float = STATUS_TIMEOUT) -> list[str]:
     except Exception:
         return ["(error)"]
 
-def _last_nonempty_line(s: str) -> str:
-    s = (s or "").strip("\n")
-    for ln in s.splitlines()[::-1]:
-        ln = ln.strip()
-        if ln:
-            return ln
-    return ""
-
-def eval_header_cached(prefix: str | None, cmd: str | None) -> str | None:
-    """Return 'prefix + last stdout line', stderr ignored, cached for HEADER_TTL."""
-    if not cmd:
-        return None
-    now = time.monotonic()
-    cached = _header_cache.get(cmd)
-    if cached and (now - cached[0]) < HEADER_TTL:
-        line = cached[1]
-    else:
-        try:
-            r = shell(cmd, timeout=STATUS_TIMEOUT)
-            line = _last_nonempty_line(r.stdout) or "(no output)"   # stdout only
-        except Exception:
-            line = "(error)"
-        _header_cache[cmd] = (now, line)
-    return f"{prefix or ''}{line}"
-
 def run_cmd_like(script_or_action: str, label="action"):
     raw = token(script_or_action)
     if os.path.isfile(raw):
@@ -175,50 +148,25 @@ def run_cmd_like(script_or_action: str, label="action"):
     except Exception as e:
         return False, f"✗ ERR\n{e}"
 
-import shlex, signal
-
 def run_cmd_bg(cmd: str, label: str = "bg"):
-    """
-    Detach a long-running command (listener/daemon) so the OLED menu doesn't block.
-    Stdout/err go to logs/<label>.log.
-    """
     raw = token(cmd)
     logf = (LOG_DIR / f"{label}.log").open("ab", buffering=0)
     try:
-        # Prefer systemd-run (if available) so scope is tracked by systemd
         if shutil.which("systemd-run"):
-            # --collect cleans the transient unit after exit
             unit = f"p4wnp1-{label}".replace("/", "_")
-            scmd = f'systemd-run --unit={unit} --collect --property=StandardOutput=append:{logf.name} ' \
-                   f'--property=StandardError=append:{logf.name} -- {raw}'
+            scmd = (
+                f'systemd-run --unit={unit} --collect '
+                f'--property=StandardOutput=append:{logf.name} '
+                f'--property=StandardError=append:{logf.name} -- {raw}'
+            )
             subprocess.Popen(scmd, shell=True, cwd=P4WN_HOME)
         else:
-            # Fallback: double-fork via setsid
             subprocess.Popen(raw, shell=True, cwd=P4WN_HOME,
                              stdout=logf, stderr=logf,
                              preexec_fn=os.setsid, start_new_session=True)
         return True, f"Started in background: {raw}"
     except Exception as e:
         return False, f"✗ BG start failed: {e}"
-
-def header_value(prefix: str|None, cmd: str|None) -> str|None:
-    """Return 'prefix + value' using stdout only (ignore stderr), cached for HEADER_TTL."""
-    if not cmd:
-        return None
-    now = time.monotonic()
-    cached = _header_cache.get(cmd)
-    if cached and (now - cached[0]) < HEADER_TTL:
-        line = cached[1]
-    else:
-        try:
-            r = shell(cmd, timeout=STATUS_TIMEOUT)
-            line = _last_nonempty_line(r.stdout)  # stdout only to avoid /bin/sh errors on screen
-            if not line:
-                line = "(no output)"
-        except Exception:
-            line = "(error)"
-        _header_cache[cmd] = (now, line)
-    return f"{prefix or ''}{line}"
 
 # ---------- Menu data helpers ----------
 def replace_tokens(obj):
@@ -245,7 +193,6 @@ def _valid_selector(sel: dict) -> bool:
 def validate_items(items):
     v=[]
     for it in items:
-        # Hide any "← Back" entries; we have a real Back key (KEY2)
         if title_of(it).strip().startswith("←"): continue
         if is_submenu(it) or is_action(it) or is_script(it) or is_status(it):
             v.append(it); continue
@@ -302,13 +249,12 @@ class MenuState:
         self.index = 0
         self.offset = 0
         self.sel_cursor = {}
-        self.header_meta = None   # NEW: tuple(prefix, cmd) for this menu, or None
 
     def rows(self): return screen_rows()
     def current(self): return self.items[self.index] if self.items else None
 
-    def visible_slice(self):
-        rows = self.rows()
+    def visible_slice(self, usable_rows=None):
+        rows = self.rows() if usable_rows is None else usable_rows
         if self.index < self.offset: self.offset = self.index
         if self.index >= self.offset + rows: self.offset = self.index - rows + 1
         return self.items[self.offset:self.offset + rows]
@@ -329,6 +275,12 @@ class MenuState:
         ch = it["selector"]["choices"]; return ch[self.sel_pos(it) % len(ch)]
 
 # ---------- Drawing ----------
+def _centered_header(text: str) -> str:
+    cols = screen_cols()
+    raw = f"== {text} =="
+    pad = max(0, (cols - len(raw)) // 2)
+    return (" " * pad + raw)[:cols]
+
 def draw_text_lines(lines, hold=0.0):
     cols = screen_cols()
     wrapped=[]
@@ -341,21 +293,12 @@ def draw_text_lines(lines, hold=0.0):
             y += LINE_H
     if hold>0: time.sleep(hold)
 
-def render_list(state: "MenuState"):
+def render_list(state: "MenuState", header_text: str):
     cols = screen_cols()
-
-    # If this menu itself has a header, draw it as the first, non-selectable line
-    header_lines = []
-    if state.header_meta:
-        hp, hc = state.header_meta
-        hv = header_value(hp, hc)
-        if hv:
-            header_lines.append(hv[:cols*2])  # clamp width; we already wrap later
-
-    view = state.visible_slice()
-    lines = []
-
-    # Draw list items
+    rows = screen_rows()
+    lines = [_centered_header(header_text)]
+    usable_rows = max(0, rows - 1)
+    view = state.visible_slice(usable_rows=usable_rows)
     for i, it in enumerate(view, start=state.offset):
         name = title_of(it)
         if is_selector(it):
@@ -363,16 +306,7 @@ def render_list(state: "MenuState"):
             name = f"{name}: {lab}"
         prefix = "> " if i == state.index else "  "
         lines.append((prefix + name)[:cols*2])
-
-    # If we are hovering an item in the parent menu that has header_cmd/prefix, show it
-    cur = state.current()
-    if cur and is_submenu(cur) and ("header_cmd" in cur or "header_prefix" in cur):
-        hv = header_value(cur.get("header_prefix"), cur.get("header_cmd"))
-        if hv:
-            # Append at the end (like your screenshots), still non-selectable
-            lines.append(hv[:cols*2])
-
-    draw_text_lines(header_lines + lines)
+    draw_text_lines(lines)
 
 # ----- Detail view (for status outputs after Select) -----
 _detail = None  # dict with {'title': str, 'raw_lines': list[str], 'offset': int}
@@ -392,26 +326,25 @@ def render_detail():
     cols = screen_cols()
     rows = screen_rows()
     head = "> " + _detail["title"]
-    # wrap body lines fresh each draw (adapts to rotation/font changes)
     body_wrapped = []
     for ln in _detail["raw_lines"]:
         body_wrapped += wrap(ln, cols) or [""]
     max_body_rows = max(0, rows - 1)
     max_off = max(0, len(body_wrapped) - max_body_rows)
     off = max(0, min(_detail["offset"], max_off))
-
     page = [head] + body_wrapped[off: off + max_body_rows]
     draw_text_lines(page)
-
-    # clamp stored offset
     _detail["offset"] = off
 
 def toast(msg: str, ms: float = TOAST_TIME):
     draw_text_lines(wrap(msg, screen_cols()), hold=ms)
 
-# ---------- Input (debounced, idle & saver, rotation-aware mapping) ----------
+# ---------- Screensaver helpers ----------
+# _saver_mode: 0=off, 1=logo shown, 2=powered off
 _last_input = time.monotonic()
-_saver_on   = False
+_saver_mode = 0
+_current_header = "Menu"  # track header label
+_saver_on  = False        # device hidden flag (backward-compat)
 
 def _low(pin): return GPIO.input(pin) == GPIO.LOW
 
@@ -420,20 +353,6 @@ def _wait_release(pin, timeout=RELEASE_WAIT):
     while _low(pin):
         time.sleep(0.01)
         if time.monotonic() - t0 > timeout: break
-
-def _wake_if_saver():
-    global _saver_on
-    if _saver_on:
-        try: DEVICE.show()
-        except Exception: pass
-        _saver_on = False
-
-def _maybe_saver():
-    global _saver_on
-    if (time.monotonic() - _last_input) >= IDLE_TIMEOUT_S and not _saver_on:
-        try: DEVICE.hide()
-        except Exception: pass
-        _saver_on = True
 
 def _toggle_rotate():  # toggle 0 <-> 2 only
     cur = _load_rotation()
@@ -445,55 +364,140 @@ def _toggle_rotate():  # toggle 0 <-> 2 only
     except Exception as e:
         print(f"[!] Re-init OLED failed after rotate: {e}")
 
-def read_event():
-    """Return one of: 'up','down','enter','back','sel-cycle','rotate', or None.
-       Mapping is based on current rotation (0 vs 2).
-       Joystick UP/DOWN are **flipped when ROT==0** so UI always feels consistent."""
+def _render_logo_once():
+    # Draws the saver image (if present) scaled and centered.
+    try:
+        from PIL import ImageOps
+
+        # Search common names & extensions
+        candidates = [
+            Path(P4WN_HOME) / "oled" / "saver.png",
+            Path(P4WN_HOME) / "oled" / "saver.jpg",
+            Path(P4WN_HOME) / "oled" / "saver.jpeg",
+            Path(P4WN_HOME) / "oled" / "saver.bmp",
+            Path(P4WN_HOME) / "oled" / "p4wnp1-o2.png",
+            Path(P4WN_HOME) / "oled" / "p4wnp1-o2.jpg",
+        ]
+        img_path = next((p for p in candidates if p.exists()), None)
+
+        with canvas(DEVICE) as draw:
+            if img_path:
+                img = Image.open(img_path)
+
+                # Convert to 1-bit, ensure white-on-black for OLED
+                img = img.convert("L")  # grayscale
+                # OPTIONAL: flip this boolean if your image looks inverted
+                INVERT = False
+                if INVERT:
+                    img = ImageOps.invert(img)
+                img = img.point(lambda p: 255 if p >= 128 else 0, mode="1")
+
+                # Scale to fit
+                W, H = DEVICE.width, DEVICE.height
+                iw, ih = img.size
+                scale = min(W/iw, H/ih)
+                nw, nh = max(1, int(iw*scale)), max(1, int(ih*scale))
+                img = img.resize((nw, nh), Image.LANCZOS)
+
+                # Center
+                x = (W - nw) // 2
+                y = (H - nh) // 2
+                draw.bitmap((x, y), img, fill=255)
+            else:
+                # Fallback minimal text logo if no file found
+                draw.text((0, 0), "P4wnP1 O2", font=FONT, fill=255)
+    except Exception:
+        pass
+
+def _show_logo():
+    global _saver_mode
+    if _saver_mode == 1:  # already showing
+        return
+    try:
+        DEVICE.show()
+    except Exception:
+        pass
+    _render_logo_once()
+    _saver_mode = 1
+
+def _power_off():
+    global _saver_mode
+    try:
+        DEVICE.hide()
+    except Exception:
+        pass
+    _saver_mode = 2
+
+def _wake_from_saver():
+    global _saver_mode
+    if _saver_mode == 2:
+        try: DEVICE.show()
+        except Exception: pass
+    _saver_mode = 0
+
+def _peek_logo(duration=SAVER_PEEK_S):
+    _show_logo()
+    time.sleep(max(0.0, duration))
+    _wake_from_saver()
+
+def _idle_tick():
+    """Two-stage saver: logo after SAVER_SHOW_AFTER_S, power off after SAVER_POWER_OFF_S."""
+    global _saver_mode
+    idle = time.monotonic() - _last_input
+    if idle >= SAVER_POWER_OFF_S and _saver_mode != 2:
+        _power_off()
+    elif idle >= SAVER_SHOW_AFTER_S and _saver_mode == 0:
+        _show_logo()
+
+def _mark_input():
     global _last_input
+    _last_input = time.monotonic()
+    if _saver_mode:
+        _wake_from_saver()
+
+# ---------- Input (debounced; rotation-aware mapping) ----------
+def read_event():
+    """Return one of: 'up','down','enter','back','sel-cycle','rotate', or None."""
     rot = _load_rotation()
 
     # Map side keys
     if rot == 2:
-        # ROT=2: KEY3=Enter, KEY2=Back, KEY1=Rotate(long)/Cycle(short)
         if _low(KEY1):
             t0 = time.monotonic()
             while _low(KEY1):
                 time.sleep(0.02)
                 if time.monotonic() - t0 >= LONG_PRESS_S:
-                    _wait_release(KEY1); _last_input=time.monotonic(); _wake_if_saver(); return 'rotate'
-            time.sleep(DEBOUNCE); _last_input=time.monotonic(); _wake_if_saver(); return 'sel-cycle'
+                    _wait_release(KEY1); _mark_input(); return 'rotate'
+            time.sleep(DEBOUNCE); _mark_input(); return 'sel-cycle'
         if _low(KEY2):
-            time.sleep(DEBOUNCE); _wait_release(KEY2); _last_input=time.monotonic(); _wake_if_saver(); return 'back'
+            time.sleep(DEBOUNCE); _wait_release(KEY2); _mark_input(); return 'back'
         if _low(KEY3):
-            time.sleep(DEBOUNCE); _wait_release(KEY3); _last_input=time.monotonic(); _wake_if_saver(); return 'enter'
+            time.sleep(DEBOUNCE); _wait_release(KEY3); _mark_input(); return 'enter'
     else:
-        # ROT=0: KEY1=Enter, KEY2=Back, KEY3=Rotate(long)/Cycle(short)
         if _low(KEY3):
             t0 = time.monotonic()
             while _low(KEY3):
                 time.sleep(0.02)
                 if time.monotonic() - t0 >= LONG_PRESS_S:
-                    _wait_release(KEY3); _last_input=time.monotonic(); _wake_if_saver(); return 'rotate'
-            time.sleep(DEBOUNCE); _last_input=time.monotonic(); _wake_if_saver(); return 'sel-cycle'
+                    _wait_release(KEY3); _mark_input(); return 'rotate'
+            time.sleep(DEBOUNCE); _mark_input(); return 'sel-cycle'
         if _low(KEY2):
-            time.sleep(DEBOUNCE); _wait_release(KEY2); _last_input=time.monotonic(); _wake_if_saver(); return 'back'
+            time.sleep(DEBOUNCE); _wait_release(KEY2); _mark_input(); return 'back'
         if _low(KEY1):
-            time.sleep(DEBOUNCE); _wait_release(KEY1); _last_input=time.monotonic(); _wake_if_saver(); return 'enter'
+            time.sleep(DEBOUNCE); _wait_release(KEY1); _mark_input(); return 'enter'
 
     # Joystick up/down — **flip when ROT==0**
     if _low(JOY_UP):
-        time.sleep(DEBOUNCE); _wait_release(JOY_UP); _last_input=time.monotonic(); _wake_if_saver()
+        time.sleep(DEBOUNCE); _wait_release(JOY_UP); _mark_input()
         return 'down' if rot == 0 else 'up'
     if _low(JOY_DOWN):
-        time.sleep(DEBOUNCE); _wait_release(JOY_DOWN); _last_input=time.monotonic(); _wake_if_saver()
+        time.sleep(DEBOUNCE); _wait_release(JOY_DOWN); _mark_input()
         return 'up' if rot == 0 else 'down'
 
-    # ignore left/right/center
     return None
 
 # ---------- Exec ----------
 def exec_item(it):
-    # Status items open a scrollable detail view (only on Select)
     if is_status(it):
         lines = read_status_lines(it["status_cmd"])
         detail_open(title_of(it), lines)
@@ -503,13 +507,11 @@ def exec_item(it):
     label = title_of(it).replace(" ", "_")
     bg = bool(it.get("background"))
 
-    # Choose the resolver used by both "action" and "script"
     def _resolve_cmd():
         if is_action(it):
             return it["action"]
         if is_script(it):
             path = token(it["script"])
-            # If script path isn't a file, treat it as a shell command
             if os.path.isfile(path):
                 if   path.endswith(".py"): return f"python3 {path}"
                 if   path.endswith(".sh"): return f"bash {path}"
@@ -529,17 +531,21 @@ def exec_item(it):
 
 # ---------- Main ----------
 def main():
-    root = load_menu_items()
-    stack = [MenuState(root)]
+    items_root = load_menu_items()
+    stack = [MenuState(items_root)]
+    header_stack = ["Menu"]  # keep current header for centering
+    global _current_header
+    _current_header = header_stack[-1]
+
     try:
         last_mtime = MENU_CONFIG.stat().st_mtime
     except Exception:
         last_mtime = 0
 
-    render_list(stack[-1])
+    render_list(stack[-1], header_stack[-1])
 
     while True:
-        _maybe_saver()
+        _idle_tick()  # manage screensaver stages
 
         # hot-reload at root when NOT in detail view
         try:
@@ -547,8 +553,9 @@ def main():
             if mt != last_mtime and not detail_active():
                 last_mtime = mt
                 stack[0] = MenuState(load_menu_items())
-                if len(stack) == 1:
-                    render_list(stack[-1])
+                header_stack[0] = "Menu"
+                if len(stack) == 1 and _saver_mode == 0:
+                    render_list(stack[-1], header_stack[-1])
         except Exception:
             pass
 
@@ -558,13 +565,11 @@ def main():
             continue
 
         if detail_active():
-            # In detail view: up/down scroll, back exits, rotate re-render
             if ev == 'rotate':
                 _toggle_rotate(); render_detail(); continue
             if ev == 'back':
-                detail_close(); render_list(stack[-1]); continue
-            if ev == 'up' or ev == 'down':
-                # recompute wrapped length to know bounds
+                detail_close(); render_list(stack[-1], header_stack[-1]); continue
+            if ev in ('up','down'):
                 cols = screen_cols(); rows = screen_rows()
                 body_wrapped=[]
                 for ln in _detail["raw_lines"]:
@@ -576,39 +581,39 @@ def main():
                 else:
                     _detail["offset"] = min(max_off, _detail["offset"] + 1)
                 render_detail(); continue
-            if ev in ('enter','sel-cycle'):
-                # ignore selects while in detail view
-                render_detail(); continue
-            # anything else: continue loop
+            # ignore enter/sel-cycle while in detail
             continue
 
         # Normal list navigation
         st = stack[-1]
         cur = st.current()
+        _current_header = header_stack[-1]
 
         if ev == 'rotate':
             _toggle_rotate()
             toast(f"Rotate={_load_rotation()}")
-            render_list(st)
+            if _saver_mode == 0:
+                render_list(st, _current_header)
             continue
 
-        if ev == 'up':   st.up();   render_list(st); continue
-        if ev == 'down': st.down(); render_list(st); continue
+        if ev == 'up':   st.up();   render_list(st, _current_header); continue
+        if ev == 'down': st.down(); render_list(st, _current_header); continue
 
         if ev == 'back':
             if len(stack) > 1:
-                stack.pop()
-                render_list(stack[-1])
+                stack.pop(); header_stack.pop()
+                render_list(stack[-1], header_stack[-1])
             else:
-                toast("Top menu")
-                render_list(st)
+                # At top: show the logo briefly instead of a text toast
+                _peek_logo(SAVER_PEEK_S)
+                render_list(st, header_stack[-1])
             continue
 
         if ev == 'sel-cycle':
             if cur and is_selector(cur):
-                st.sel_next(cur); render_list(st)
+                st.sel_next(cur); render_list(st, _current_header)
             else:
-                toast("Hold to rotate"); render_list(st)
+                toast("Hold to rotate"); render_list(st, _current_header)
             continue
 
         if ev == 'enter':
@@ -619,17 +624,15 @@ def main():
                 disp = choice_label(ch)
                 cmd  = cur["selector"]["action_template"].replace("{value}", str(val)).replace("{P4WN_HOME}", P4WN_HOME)
                 toast(run_cmd_like(cmd, label=f"{title_of(cur)}_{disp}".replace(" ","_"))[1])
-                render_list(st); continue
+                render_list(st, _current_header); continue
             if is_submenu(cur):
                 sub = validate_items(cur["submenu"])
-                sub_state = MenuState(sub)
-                # NEW: pin this submenu's header (non-selectable first line)
-                sub_state.header_meta = (cur.get("header_prefix"), cur.get("header_cmd"))
-                stack.append(sub_state)
-                render_list(stack[-1]); continue
-            exec_item(cur);  # may open detail view or run action/script
+                stack.append(MenuState(sub))
+                header_stack.append(title_of(cur))
+                render_list(stack[-1], header_stack[-1]); continue
+            exec_item(cur)
             if not detail_active():
-                render_list(st)
+                render_list(st, _current_header)
             continue
 
 if __name__ == "__main__":
