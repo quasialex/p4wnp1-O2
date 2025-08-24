@@ -1,0 +1,26 @@
+{
+  "name": "portal_sync",
+  "group": "network",
+  "summary": "Non-destructive sync of captive portal; create probe files; keep /var/www/html as-is",
+  "requirements": [],
+  "harden": false,
+  "preflight": [
+    "mkdir -p /var/www/html /var/www/html/probe /opt/p4wnp1/data",
+    "[ -e /opt/p4wnp1/data/captive.log ] || install -o www-data -g www-data -m 660 /dev/null /opt/p4wnp1/data/captive.log",
+    "[ -f /var/www/html/index.html ] || rsync -a /opt/p4wnp1/payloads/network/web/captive/ /var/www/html/",
+    "install -o www-data -g www-data -m 755 /opt/p4wnp1/payloads/network/web/capture.py /var/www/html/capture.py",
+    "[ -f /var/www/html/probe/ncsi.txt ] || printf '%s\\n' 'Microsoft NCSI' > /var/www/html/probe/ncsi.txt",
+    "[ -f /var/www/html/probe/connecttest.txt ] || printf '%s\\n' 'Microsoft Connect Test' > /var/www/html/probe/connecttest.txt",
+    "[ -f /var/www/html/probe/success.txt ] || printf '%s\\n' 'Success' > /var/www/html/probe/success.txt",
+    "[ -f /var/www/html/probe/firefox_success.txt ] || printf '%s\\n' 'success' > /var/www/html/probe/firefox_success.txt",
+    "[ -f /var/www/html/probe/firefox_success.html ] || printf '%s\\n' 'success' > /var/www/html/probe/firefox_success.html",
+    "chown -R www-data:www-data /var/www/html /opt/p4wnp1/data",
+    "chmod 755 /var/www/html",
+    "chmod 644 /var/www/html/probe/* 2>/dev/null || true",
+    "a2enmod rewrite cgi alias headers >/dev/null 2>&1 || true",
+    "a2ensite p4wnp1-portal.conf >/dev/null 2>&1 || true",
+    "apache2ctl configtest",
+    "systemctl restart apache2"
+  ],
+  "cmd": "echo 'Portal synced non-destructively; probes ensured; Apache restarted.'"
+}

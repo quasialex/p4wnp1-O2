@@ -1,0 +1,24 @@
+{
+  "name": "portal_enable_cgi",
+  "group": "network",
+  "summary": "Enable Apache vhost, CGI, sync portal, ensure index and servername",
+  "requirements": [],
+  "harden": false,
+  "preflight": [
+    "a2enmod rewrite cgi alias headers",
+    "mkdir -p /var/www/html /opt/p4wnp1/data",
+    "install -o www-data -g www-data -m 660 /dev/null /opt/p4wnp1/data/captive.log",
+    "rsync -a --delete /opt/p4wnp1/payloads/network/web/captive/ /var/www/html/",
+    "cp -f /opt/p4wnp1/payloads/network/web/capture.py /var/www/html/capture.py",
+    "chown www-data:www-data /var/www/html/capture.py",
+    "chmod 755 /var/www/html/capture.py",
+    "test -s /var/www/html/index.html || printf '%s\\n' '<!doctype html><meta charset=\"utf-8\"><title>Portal</title><h1>P4wnP1 Portal</h1>' > /var/www/html/index.html",
+    "printf '%s\\n' 'ServerName p4wnp1.local' > /etc/apache2/conf-available/p4wnp1-servername.conf",
+    "a2enconf p4wnp1-servername",
+    "cp -f /opt/p4wnp1/payloads/network/web/apache/p4wnp1-portal.conf /etc/apache2/sites-available/p4wnp1-portal.conf",
+    "a2dissite 000-default.conf || true",
+    "a2ensite p4wnp1-portal.conf",
+    "systemctl restart apache2"
+  ],
+  "cmd": "echo 'Portal synced; vhost installed; CGI enabled; index ensured; apache restarted.'"
+}

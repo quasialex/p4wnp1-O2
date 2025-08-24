@@ -1,0 +1,13 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Connected</title>
+<style>body{font-family:sans-serif;margin:2rem;text-align:center}</style>
+<h1>Thank you!</h1>
+<p>You are now connected.</p>
+<script>
+  // try to close CNA/minibrowser; if blocked, fallback to a harmless local page
+  setTimeout(function () {
+    try { window.close(); } catch(e) {}
+    location.replace('/probe/canonical.html'); // returns "OK" post-auth
+  }, 2000);
+</script>

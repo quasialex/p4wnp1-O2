@@ -1,8 +1,9 @@
 {
   "name": "responder",
-  "kind": "network",
-  "env": { "IFACE": "usb0" },
-  "cmd": [ "/bin/bash", "-lc", "/opt/p4wnp1/extras/network/run_responder.sh \"$IFACE\"" ],
-  "working_dir": "/opt/p4wnp1",
-  "harden": true
+  "group": "network",
+  "summary": "Run Responder on interface (default wlan0)",
+  "requirements": [],
+  "harden": false,
+  "script": "payloads/network/run_responder.py",
+  "env": { "RESP_IFACE": "wlan0" }
 }

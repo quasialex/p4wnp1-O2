@@ -1,7 +1,7 @@
 {
   "name": "wifi_ap_captive_stop",
   "group": "network",
-  "summary": "Stop AP and flush captive rules",
+  "summary": "Stop AP and restore NetworkManager on wlan0",
   "requirements": [],
   "harden": false,
   "script": "payloads/network/wifi_ap_captive_stop.py",

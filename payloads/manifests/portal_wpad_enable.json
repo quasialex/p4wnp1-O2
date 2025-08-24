@@ -1,0 +1,18 @@
+{
+  "name": "portal_wpad_enable",
+  "group": "network",
+  "summary": "Serve wpad.dat and advertise via DHCP option 252 (SIGHUP dnsmasq in AP payload)",
+  "requirements": [],
+  "harden": false,
+  "preflight": [
+    "ip=$(ip -4 -o addr show wlan0 | awk '{print $4}' | cut -d/ -f1)",
+    "printf '%s\n' 'function FindProxyForURL(url,host){ return \"DIRECT\"; }' > /var/www/html/wpad.dat",
+    "sed -i '/^dhcp-option=252/d' /etc/dnsmasq.d/p4wnp1-ap.conf || true",
+    "echo dhcp-option=252,\\\"http://$ip/wpad.dat\\\" >> /etc/dnsmasq.d/p4wnp1-ap.conf",
+    "pkill -HUP -f 'dnsmasq --no-daemon' || true",
+    "cp -f /opt/p4wnp1/payloads/network/web/captive/success.html /var/www/html/success.html",
+    "chown -R www-data:www-data /var/www/html",
+    "chmod -R 755 /var/www/html"
+  ],
+  "cmd": "echo 'WPAD published at /wpad.dat and advertised via DHCP 252 (dnsmasq reloaded)'"
+}

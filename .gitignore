@@ -18,3 +18,7 @@ venv/
 .idea/
 .vscode/
 
+# Do not commit harvested creds / runtime stamps
+data/
+**/captive.log
+**/auth/

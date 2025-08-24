@@ -682,10 +682,11 @@ def _run_preflight(env: dict | None, wdir: str | None, pre: list[str] | None) ->
 
 def _transient_unit_cleanup(unit: str):
     """Ensure no stale fragment/transient unit blocks systemd-run."""
-    # Stop if running, ignore errors
-    systemctl("stop", unit, check=False)
-    systemctl("disable", unit, check=False)
-    # Remove fragment file if it exists
+    # Stop/disable if present (ignore errors)
+    sh(f"systemctl stop {unit}", check=False)
+    sh(f"systemctl disable {unit}", check=False)
+
+    # Remove any persistent fragment
     frag = Path("/etc/systemd/system") / unit
     dropin = Path("/etc/systemd/system") / (unit + ".d")
     try:
@@ -696,15 +697,25 @@ def _transient_unit_cleanup(unit: str):
     try:
         if dropin.exists():
             for f in dropin.glob("*"):
-                f.unlink(missing_ok=True)
-            dropin.rmdir()
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+            try:
+                dropin.rmdir()
+            except Exception:
+                pass
     except Exception:
         pass
-    # Remove stale transient symlink/file
+
+    # Remove stale transient instance
+    run_frag = Path("/run/systemd/transient") / unit
     try:
-        (Path("/run/systemd/transient") / unit).unlink()
+        if run_frag.exists():
+            run_frag.unlink()
     except Exception:
         pass
+
     # Reload & clear failures
     sh("systemctl daemon-reload", check=False)
     sh("systemctl reset-failed", check=False)

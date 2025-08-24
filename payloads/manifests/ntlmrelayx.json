@@ -1,11 +1,9 @@
 {
   "name": "ntlmrelayx",
   "group": "network",
-  "summary": "Run ntlmrelayx against targets list, loot to /opt/p4wnp1/loot/ntlmrelayx",
-  "requirements": ["net"],
-  "env": {
-    "RELAY_TARGETS": "/opt/p4wnp1/config/relay_targets.txt",
-    "RELAY_LOOT": "/opt/p4wnp1/loot/ntlmrelayx",
-    "IFACE": "usb0"
-  }
+  "summary": "Run Impacket ntlmrelayx to target host",
+  "requirements": [],
+  "harden": false,
+  "script": "payloads/network/run_ntlmrelayx.py",
+  "env": { "RELAY_TARGET": "smb://10.99.0.1" }
 }

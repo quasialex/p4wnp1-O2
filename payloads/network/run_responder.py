@@ -1,28 +1,19 @@
-# File: /opt/p4wnp1/payloads/network/run_responder.py
-import subprocess
-import sys
-import os
+#!/usr/bin/env python3
+import os, sys, subprocess
+from pathlib import Path
 
-iface = os.environ.get("IFACE", "usb0")
-responder_path = "/usr/share/responder/Responder.py"
+IFACE = os.environ.get("RESP_IFACE", "wlan0")
 
-if not os.path.exists(responder_path):
-    print(f"[!] Responder not found at {responder_path}")
-    sys.exit(1)
+def main():
+    cmd = "/usr/bin/responder" if Path("/usr/bin/responder").exists() else None
+    if not cmd:
+        # try module
+        cmd = "python3 -m Responder"
+    args = f"{cmd} -I {IFACE} -wd"
+    print(f"[+] Starting Responder on {IFACE}")
+    p = subprocess.Popen(args, shell=True)
+    p.wait()
+    return p.returncode
 
-print(f"[*] Starting Responder on {iface}")
-
-cmd = [
-    "python3", responder_path,
-    "-I", iface,
-    "-w", "-r", "-f", "-F"
-]
-
-try:
-    subprocess.run(cmd)
-except KeyboardInterrupt:
-    print("[!] Responder interrupted")
-    sys.exit(0)
-except Exception as e:
-    print(f"[!] Error running Responder: {e}")
-    sys.exit(2)
+if __name__ == "__main__":
+    sys.exit(main())

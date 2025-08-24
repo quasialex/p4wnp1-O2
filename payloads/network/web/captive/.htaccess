@@ -1,7 +1,16 @@
+# Enable rewrite in this directory
 RewriteEngine On
-# Treat common captive probes as 302 to /
+
+# Common captive portal probes → redirect to /
 RewriteCond %{REQUEST_URI} ^/generate_204$ [OR]
 RewriteCond %{REQUEST_URI} ^/gen_204$ [OR]
-RewriteCond %{REQUEST_URI} ^/ncsi.txt$ [OR]
-RewriteCond %{REQUEST_URI} ^/hotspot-detect.html$
+RewriteCond %{REQUEST_URI} ^/ncsi\.txt$ [OR]
+RewriteCond %{REQUEST_URI} ^/ncsi\.xml$ [OR]
+RewriteCond %{REQUEST_URI} ^/hotspot-detect\.html$ [OR]
+RewriteCond %{REQUEST_URI} ^/kindle-wifi/wifistub\.html$ [OR]
+RewriteCond %{REQUEST_URI} ^/library/test/success\.html$ [OR]
+RewriteCond %{REQUEST_URI} ^/success\.txt$
 RewriteRule ^.*$ / [R=302,L]
+
+# Fallback: anything not found → /
+ErrorDocument 404 /

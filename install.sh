@@ -107,11 +107,11 @@ run rsync -aH --delete "$REPO_DIR"/ "$INSTALL_DIR"/
 echo "[*] Installing OS deps ..."
 run apt update
 run env DEBIAN_FRONTEND=noninteractive apt install -y \
-  python3 python3-pip \
-  python3-spidev python3-rpi.gpio \
-  dnsmasq hostapd \
-  fonts-dejavu-core
+  python3 python3-pip python3-spidev python3-rpi.gpio dnsmasq hostapd fonts-dejavu-core impacket-scripts \
+  apache2 hostapd dnsmasq iptables-nft network-manager responder \
+  python3-certbot-apache certbot   # optional; comment out if no LE
 
+systemctl enable --now apache2
 
 echo "[*] Python deps ..."
 PIP_FLAGS=""
