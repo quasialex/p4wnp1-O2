@@ -159,6 +159,23 @@ inst_unit "$WEBUI_UNIT"
 
 run systemctl daemon-reload
 
+# --- Enable I2C/SPI overlays for OLED ---
+BOOTCFG="/boot/config.txt"
+[[ -f /boot/firmware/config.txt ]] && BOOTCFG="/boot/firmware/config.txt"
+
+for key in i2c_arm spi; do
+  if ! grep -q "^dtparam=${key}=on" "$BOOTCFG" 2>/dev/null; then
+    if [[ "$DRY_RUN" == "yes" ]]; then
+      echo "[dry-run] would append 'dtparam=${key}=on' to $BOOTCFG"
+    else
+      echo "dtparam=${key}=on" >> "$BOOTCFG"
+      echo "[*] Enabled ${key} in $BOOTCFG"
+    fi
+  else
+    echo "[*] ${key} already enabled"
+  fi
+done
+
 # --- Enable/Start selected services ---
 start_unit() {
   local u="$1"
