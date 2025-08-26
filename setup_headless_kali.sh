@@ -1,41 +1,63 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-echo "=== [ Step 1: Purging GUI packages ] ==="
-sudo apt purge -y kali-desktop-xfce lightdm xfce4* \
-  xserver-xorg* x11-common x11-utils x11-xserver-utils \
-  gtk* gnome-icon-theme
+# Headless conversion for Kali: remove XFCE + LightDM + Xorg and boot to CLI
+# Tested on ARM builds (Raspberry Pi).
 
-echo "=== [ Step 2: Removing leftover GUI tools ] ==="
-sudo apt purge -y orage parole mousepad thunar* xfconf* \
-  gvfs* gnome* xdg-user-dirs* policykit* gksu
+if [[ $EUID -ne 0 ]]; then
+  echo "Please run as root (sudo)." >&2
+  exit 1
+fi
 
-echo "=== [ Step 3: Autoremove and clean ] ==="
-sudo apt autoremove --purge -y
-sudo apt clean
+export DEBIAN_FRONTEND=noninteractive
+APT="apt-get -y --allow-remove-essential -o Dpkg::Options::=--force-confnew -o Dpkg::Options::=--force-confdef"
 
-echo "=== [ Step 4: Installing terminal essentials ] ==="
-sudo apt update && sudo apt install -y \
-  git python3-pip screen tmux build-essential \
+echo "=== [ Prep: refresh package lists ] ==="
+apt-get update
+
+echo "=== [ Step 1: Purge desktop metas, DM, and Xorg ] ==="
+# Desktop meta packages
+$APT purge \
+  kali-desktop-xfce \
+  kali-desktop-core \
+  kali-system-gui || true
+
+# Display manager / XFCE
+$APT purge \
+  lightdm* \
+  xfce4*  \
+  xserver-xorg* \
+  x11-* \
+  gtk* \
+  gnome-icon-theme orage thunar* xfconf* \
+  gvfs* gnome* xdg-user-dirs* policykit* gksu || true
+
+# File manager + default GUI apps
+$APT purge \
+  thunar \
+  thunar-archive-plugin \
+  thunar-volman \
+  ristretto \
+  parole \
+  mousepad || true
+
+
+echo "=== [ Step 2: Autoremove and clean ] ==="
+$APT autoremove --purge || true
+apt-get clean
+
+echo "=== [ Step 3: Boot to CLI (no graphical.target) ] ==="
+systemctl set-default multi-user.target
+
+echo "=== [ Step 4: Terminal essentials & System upgrade ] ==="
+apt install -y \
+  git python3-pip python3-mitmproxy-rs screen tmux build-essential \
   libfreetype-dev libjpeg-dev python3-smbus \
-  bettercap mitmproxy responder pipx rustc cargo
+  bettercap responder rustc cargo
 
-echo "=== [ Step 5: Ensuring pipx path ] ==="
-pipx ensurepath
-
-echo "=== [ Step 6: Installing impacket from Kali repo ] ==="
-sudo apt install -y python3-impacket
-
-# Symlink all Impacket CLI tools to /usr/local/bin
-sudo find /usr/share/doc/python3-impacket/examples/ -type f -name "*.py" | while read file; do
-  binname=$(basename "$file")
-  sudo ln -sf "$file" "/usr/local/bin/$binname"
-done
-
-echo "=== [ Step 7: Installing OLED library via pip ] ==="
-pip3 install luma.oled --break-system-packages
-
-echo "=== [ Step 8: Set to CLI-only boot ] ==="
-sudo systemctl set-default multi-user.target
+apt-get -y upgrade
 
 echo "=== [ DONE ] ==="
-echo "You can now reboot into a clean, headless Kali system."
+echo "Rebooting ..."
+
+reboot
