@@ -38,7 +38,7 @@ WEBUI_TOKEN=""         # optional; empty = no auth gate
 TARGET_USER=""
 
 WITH_USB="yes"         # yes|no
-WITH_OLED="auto"       # auto|yes|no
+WITH_OLED="yes"       # auto|yes|no
 WITH_WEBUI="yes"       # yes|no
 ENABLE_SERVICES="yes"  # yes|no (copy units but don't enable/start when 'no')
 
@@ -108,7 +108,7 @@ echo "[*] Installing OS deps ..."
 run apt update
 run env DEBIAN_FRONTEND=noninteractive apt install -y \
   python3 python3-pip python3-spidev python3-rpi.gpio dnsmasq hostapd fonts-dejavu-core impacket-scripts \
-  apache2 hostapd dnsmasq iptables-nft network-manager responder \
+  apache2 hostapd dnsmasq iptables network-manager responder \
   python3-certbot-apache certbot   # optional; comment out if no LE
 
 systemctl enable --now apache2
@@ -289,5 +289,3 @@ else
   echo "    No Web UI token set (open access on the bound interface)."
 fi
 echo "    Reboot on first install so dwc2 loads: sudo reboot"
-
-echo 'eval "$(register-python-argcomplete /opt/p4wnp1/p4wnctl.py)"' >> /etc/bash_completion.d/p4wnctl
