@@ -9,6 +9,7 @@ import socket
 import subprocess
 from pathlib import Path
 from textwrap import dedent
+from string import Template
 
 # ======= Paths / constants =======
 P4WN_HOME = Path(os.environ.get("P4WN_HOME", "/opt/p4wnp1"))
@@ -33,15 +34,32 @@ PAYLOAD_MANIFEST_DIRS = [P4WN_HOME / "payloads" / "manifests"]
 
 TRANSIENT_UNIT_PREFIX = "p4w-payload-"
 
+LAST_MODE_FILE = CONFIG / "usb.last_mode"
+
 # Known units for Services submenu (optional convenience)
 SERVICE_UNITS = [
-    ("USB Core", "p4wnp1.service"),
-    ("USB Prep", "p4wnp1-usb-prep.service"),
+    ("Core", "p4wnp1.service"),
     ("OLED Menu", "oledmenu.service"),
-    ("Web UI", "p4wnp1-webui.service"),
 ]
 
-# Defaults for gadget network and MSD
+USB_CHOICES = [
+    ("HID only", "hid"),
+    ("Storage only", "storage"),
+    ("Serial only", "serial"),
+    ("HID + Serial", "hid_acm"),
+    ("HID + RNDIS (Windows)", "hid_rndis"),
+    ("HID + NCM (Win/macOS/Linux)", "hid_ncm"),
+    ("HID + ECM (macOS/Linux)", "hid_ecm"),
+    ("HID + RNDIS + Serial", "hid_rndis_acm"),
+    ("HID + NCM + Serial", "hid_ncm_acm"),
+    ("HID + NET + Serial (legacy)", "hid_net_acm"),
+    ("HID + RNDIS + Storage", "hid_storage_rndis"),
+    ("HID + NCM + Storage", "hid_storage_ncm"),
+    ("HID + ECM + Storage", "hid_storage_ecm"),
+    ("HID + NET(all) + Storage", "hid_storage_net"),
+]
+
+# Defaults for gadget network and MSg
 AP_SSID   = os.environ.get("P4WN_AP_SSID", "P4WNP1")
 AP_PSK    = os.environ.get("P4WN_AP_PSK", "p4wnp1o2")  # 8+ chars
 AP_CIDR   = os.environ.get("P4WN_AP_CIDR", "172.24.0.1/24")
@@ -54,20 +72,9 @@ USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")
 MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
 MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "128"))
 
-
-# Presets for the TUI selector
-USB_CHOICES = [
-    ("HID + NET", "hid_net"),
-    ("HID + RNDIS (Windows)", "hid_rndis"), 
-    ("HID + NET + SER (ACM)", "hid_net_acm"),
-    ("HID + NET + MSD", "hid_storage_net"),
-    ("HID + NET + MSD + SER", "hid_storage_net_acm"),
-    ("Storage Only", "storage"),
-]
-
 # ======= Small helpers =======
-def sh(cmd: str, check=True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True, check=check)
+def sh(cmd: str, check=True, input: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, check=check, input=input)
 
 def need_root():
     if os.geteuid() != 0:
@@ -406,8 +413,10 @@ def usb_prep() -> int:
 def usb_replug() -> int:
     """
     Re-enumerate without physically unplugging.
-    1) Try clean unbind/rebind of the current UDC.
-    2) If EBUSY or anything fails, rebuild the gadget with the same caps.
+    Strategy:
+      1) Stop services holding endpoints, detach MSD LUN, ensure MSD link exists.
+      2) Retry clean unbind/rebind a few times (backoff).
+      3) If still failing, rebuild from the persisted preset.
     """
     need_root()
     udc_file = USB_GADGET / "UDC"
@@ -415,48 +424,88 @@ def usb_replug() -> int:
         print("[!] No gadget bound (UDC file missing).", file=sys.stderr)
         return 2
 
-    # Try the simple unbind/rebind
+    # Make success more likely up front
+    systemctl("stop", "serial-getty@ttyGS0.service")
+    systemctl("stop", "ModemManager.service")
+    _msd_detach()
+    _ensure_msd_link_present()
+
+    # Read the current UDC name (best-effort)
     try:
         current = udc_file.read_text().strip()
     except Exception:
         current = ""
-    try:
-        udc_file.write_text("")          # unbind
-        time.sleep(0.5)
+
+    # helper: retry a write a few times
+    def _retry_write(path: Path, val: str, tries=6, delay=0.25) -> bool:
+        for i in range(tries):
+            try:
+                path.write_text(val)
+                return True
+            except OSError:
+                time.sleep(delay)
+        return False
+
+    # Try clean unbind
+    if not _retry_write(udc_file, ""):
+        print("[*] Clean unbind failed (EBUSY).", file=sys.stderr)
+    else:
+        # Re-attach the LUN now; it doesn't block rebind
+        _msd_attach()
+        # Try rebind to same (preferred) or first available UDC
         udcs = sorted([p.name for p in Path("/sys/class/udc").iterdir()])
         reb = current if current in udcs else (udcs[0] if udcs else "")
         if not reb:
             print("[!] No UDC available to rebind.", file=sys.stderr)
+            _ensure_msd_link_present(); _msd_attach()
             return 4
-        udc_file.write_text(reb)         # rebind
-        print(f"Replugged on UDC: {reb}")
-        return 0
-    except OSError as e:
-        # Fallback path: rebuild gadget to simulate a plug cycle
-        print(f"[*] Clean replug failed ({e}). Rebuilding gadget…", file=sys.stderr)
+        if _retry_write(udc_file, reb):
+            print(f"Replugged on UDC: {reb}")
+            return 0
+        else:
+            print("[*] Clean rebind failed (EBUSY).", file=sys.stderr)
+            # make sure MSD didn't get lost
+            _ensure_msd_link_present(); _msd_attach()
 
-    # Rebuild using current function set
-    caps = usb_caps_now()
-    # fully tear down and re-apply same caps
+    # ---- Fallback: full preset rebuild (always restores exact mode) ----
+    preset = ""
+    try:
+        if LAST_MODE_FILE.exists():
+            preset = LAST_MODE_FILE.read_text().strip()
+    except Exception:
+        pass
+
     try:
         usb_force_reset()
+        if preset:
+            rc = usb_apply_mode(preset)
+            if rc == 0:
+                print(f"Replugged by preset rebuild: {preset}")
+                return 0
+            print(f"[*] Preset rebuild ({preset}) failed (rc={rc}); trying snapshot…", file=sys.stderr)
+
+        # Snapshot rebuild (exact links)
+        caps = usb_caps_now()
+        _msd_detach()
         usb_teardown()
         _gadget_common_init()
         cfg = USB_GADGET / "configs/c.1"
-        if caps.get("hid"):  _link(_func_hid(), cfg)
-        if caps.get("net"):
-            _link(_func_ecm(), cfg)
-            _link(_func_rndis(), cfg)
-        if caps.get("msd"):  _link(_func_msd(), cfg)
-        if caps.get("acm"):  _link(_func_acm(), cfg)
-        if caps.get("net"):
+        if caps.get("hid"):    _link(_func_hid(), cfg)
+        if caps.get("ecm"):    _link(_func_ecm(), cfg)
+        if caps.get("rndis"):  _link(_func_rndis(), cfg)
+        if caps.get("msd"):    _link(_func_msd(), cfg)
+        if caps.get("acm"):    _link(_func_acm(), cfg)
+        if caps.get("ncm"):    _link(_func_ncm(), cfg)
+        if caps.get("rndis"):
             _enable_ms_os_desc_for_rndis("c.1", "rndis.usb0")
         _bind_first_udc()
         _ensure_usb0_ip()
-        print("Replugged by rebuild.")
+        print("Replugged by snapshot rebuild.")
         return 0
     except Exception as e2:
         print(f"[!] Replug (rebuild) failed: {e2}", file=sys.stderr)
+        # final safety so we don't end half-configured
+        _ensure_msd_link_present(); _msd_attach()
         return 1
 
 def _hid_report_desc_bytes() -> bytes:
@@ -517,6 +566,7 @@ def usb_unbind():
 
 def usb_teardown():
     usb_unbind()
+    _msd_detach()   # <— IMPORTANT: free the LUN to avoid EBUSY
     for sub in ("functions", "configs"):
         base = USB_GADGET / sub
         if not base.exists(): continue
@@ -594,6 +644,13 @@ def _func_hid():
     _write(f / "report_desc", _hid_report_desc_bytes())
     return f
 
+def _func_ncm():
+    f = USB_GADGET / "functions/ncm.usb0"
+    f.mkdir(parents=True, exist_ok=True)
+    _write(f / "dev_addr", USB_NET_DEVADDR)
+    _write(f / "host_addr", USB_NET_HOSTADDR)
+    return f
+
 def _func_ecm():
     f = USB_GADGET / "functions/ecm.usb0"
     f.mkdir(parents=True, exist_ok=True)
@@ -639,6 +696,119 @@ def _func_msd():
     _write(f / "lun.0/file", str(MSD_IMAGE))
     return f
 
+def _msd_detach():
+    """
+    Safely detach the mass-storage LUN so configfs ops don't fail with EBUSY.
+    We try 'eject' if available, else blank the 'file' attribute.
+    """
+    f = USB_GADGET / "functions/mass_storage.usb0"
+    if not f.exists():
+        return
+    eject = f / "lun.0/eject"
+    if eject.exists():
+        try:
+            eject.write_text("1")
+            time.sleep(0.1)
+            return
+        except Exception:
+            pass
+    file_attr = f / "lun.0/file"
+    if file_attr.exists():
+        try:
+            file_attr.write_text("")   # detach backing file
+            time.sleep(0.1)
+        except Exception:
+            pass
+
+def _msd_attach(path: str | None = None):
+    """
+    Re-attach the MSD LUN to the backing file (defaults to MSD_IMAGE).
+    """
+    if path is None:
+        path = str(MSD_IMAGE)
+    f = USB_GADGET / "functions/mass_storage.usb0" / "lun.0" / "file"
+    try:
+        f.write_text(path)
+        time.sleep(0.1)
+    except Exception:
+        pass
+
+def _msd_linked() -> bool:
+    return (USB_GADGET / "configs/c.1/mass_storage.usb0").exists() and \
+           (USB_GADGET / "functions/mass_storage.usb0").exists()
+
+def _ensure_msd_link_present():
+    """If the MSD function exists but the c.1 symlink was lost, restore it."""
+    f = USB_GADGET / "functions/mass_storage.usb0"
+    cfg = USB_GADGET / "configs/c.1"
+    ln = cfg / "mass_storage.usb0"
+    if f.exists() and not ln.exists():
+        try: ln.symlink_to(f)
+        except Exception: pass
+
+def _rndis_inf_text(vid="0525", pid="A4A2") -> str:
+    txt = dedent(f"""\
+    ; P4wnP1-O2 RNDIS binding to inbox driver
+    [Version]
+    Signature="$Windows NT$"
+    Class=Net
+    ClassGuid={{4d36e972-e325-11ce-bfc1-08002be10318}}
+    Provider=%Provider%
+    DriverVer=07/01/2021,10.0.19041.1
+
+    [Manufacturer]
+    %Provider%=DeviceList,NTamd64
+
+    [DeviceList.NTamd64]
+    %RNDIS.DeviceDesc%=RNDIS_Install, USB\\VID_{vid}&PID_{pid}
+
+    [RNDIS_Install.NT]
+    Include=netrndis.inf
+    Needs=netrndis.ndis6
+
+    [Strings]
+    Provider="P4wnP1-O2"
+    RNDIS.DeviceDesc="USB Ethernet (RNDIS) Gadget"
+    """).strip("\n")
+    # Ensure CRLF line endings for Windows
+    return "\r\n".join(txt.splitlines()) + "\r\n"
+
+def usb_inf_write() -> int:
+    """
+    Mount the MSD image and write an INF file for quick manual binding on Windows.
+    """
+    need_root()
+    _ensure_msd_image()
+    # Detach LUN while we modify the image to avoid EBUSY/corruption
+    _msd_detach()
+    mnt = Path("/mnt/p4wnp1_msd")
+    mnt.mkdir(parents=True, exist_ok=True)
+    cp = sh(f"mount -o loop,uid=0,gid=0 {MSD_IMAGE} {mnt}", check=False)
+    if cp.returncode != 0:
+        sys.stderr.write(cp.stderr or "")
+        print("[!] Could not mount MSD image; is it in use?", file=sys.stderr)
+        return 1
+    try:
+        d = mnt / "RNDIS"
+        d.mkdir(exist_ok=True)
+        inf = d / "P4wnP1-O2-RNDIS.inf"
+
+        # read current gadget VID/PID (e.g. "0x1d6b" → "1D6B")
+        vid_txt = (USB_GADGET / "idVendor").read_text().strip()
+        pid_txt = (USB_GADGET / "idProduct").read_text().strip()
+        vid = vid_txt.replace("0x", "").replace("0X", "").upper().zfill(4)
+        pid = pid_txt.replace("0x", "").replace("0X", "").upper().zfill(4)
+
+        inf.write_text(_rndis_inf_text(vid, pid))
+
+        print(f"Wrote {inf}")
+    finally:
+        sh(f"umount {mnt}", check=False)
+    # Re-attach LUN so host sees the updated content
+    _msd_attach()
+
+    return 0
+
 def _func_acm():
     f = USB_GADGET / "functions/acm.usb0"
     f.mkdir(parents=True, exist_ok=True)
@@ -657,6 +827,111 @@ def _ensure_usb0_ip():
         sh(f"{ip_bin} addr add {USB0_CIDR} dev usb0 2>/dev/null || true", check=False)
         sh(f"{ip_bin} link set usb0 up 2>/dev/null || true", check=False)
 
+# ===== USB0 DHCP + NAT helpers =====
+
+RUN_DIR      = Path("/run/p4wnp1")
+DNSMASQ_PID  = RUN_DIR / "dnsmasq.usb0.pid"
+DNSMASQ_CONF = RUN_DIR / "dnsmasq.usb0.conf"
+
+def _dnsmasq_conf_text() -> str:
+    return "\n".join([
+        "interface=usb0",
+        "bind-interfaces",
+        "dhcp-range=10.13.37.100,10.13.37.200,255.255.255.0,1h",
+        "dhcp-option=3,10.13.37.1",                      # gateway
+        "dhcp-option=6,1.1.1.1,9.9.9.9",                 # DNS
+        "domain-needed",
+        "bogus-priv",
+        "no-resolv",
+        "log-queries",
+        "log-dhcp",
+    ]) + "\n"
+
+def usb_dhcp_start() -> int:
+    need_root()
+    _ensure_usb0_ip()
+    if not which("dnsmasq"):
+        print("[!] dnsmasq not installed", file=sys.stderr); return 2
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    DNSMASQ_CONF.write_text(_dnsmasq_conf_text())
+    if DNSMASQ_PID.exists():
+        usb_dhcp_stop()
+    cp = sh(f"dnsmasq --conf-file={DNSMASQ_CONF} --pid-file={DNSMASQ_PID}", check=False)
+    if cp.returncode != 0:
+        sys.stderr.write(cp.stderr or "")
+        print("[!] dnsmasq failed", file=sys.stderr)
+        return 1
+    print("DHCP: started on usb0 (dnsmasq).")
+    return 0
+
+def usb_dhcp_stop() -> int:
+    need_root()
+    if DNSMASQ_PID.exists():
+        try:
+            pid = int(DNSMASQ_PID.read_text().strip() or "0")
+            if pid > 0:
+                os.kill(pid, 15)
+                time.sleep(0.2)
+        except Exception:
+            pass
+        DNSMASQ_PID.unlink(missing_ok=True)
+    # kill stray dnsmasq on our conf
+    sh("pkill -f dnsmasq.*dnsmasq.usb0.conf", check=False)
+    print("DHCP: stopped.")
+    return 0
+
+def usb_dhcp_status() -> int:
+    print("DHCP:", "running" if DNSMASQ_PID.exists() else "stopped")
+    return 0
+
+NFT_RULESET = Template("""
+table inet p4wnp1 {
+  chain fwd {
+    type filter hook forward priority filter;
+    ct state established,related accept
+    iifname "usb0" oifname "$uplink" accept
+    iifname "$uplink" oifname "usb0" ct state established,related accept
+  }
+  chain post {
+    type nat hook postrouting priority srcnat;
+    oifname "$uplink" masquerade
+  }
+}
+""")
+
+def net_share_start(uplink: str) -> int:
+    need_root()
+    if not which("nft"):
+        print("[!] nftables (nft) not installed", file=sys.stderr); return 2
+
+    Path("/proc/sys/net/ipv4/ip_forward").write_text("1\n")
+
+    # wipe any previous table, then (re)create
+    sh("nft delete table inet p4wnp1", check=False)
+    rc = sh("nft add table inet p4wnp1", check=False).returncode
+    if rc != 0:
+        print("[!] nftables: cannot add table 'inet p4wnp1'", file=sys.stderr)
+        return 1
+
+    # chains (quote braces so the shell doesn't eat them)
+    sh("nft 'add chain inet p4wnp1 fwd  { type filter hook forward priority 0; policy accept; }'", check=False)
+    sh("nft 'add chain inet p4wnp1 post { type nat    hook postrouting priority srcnat; policy accept; }'", check=False)
+
+    # rules
+    sh("nft add rule inet p4wnp1 fwd ct state established,related accept", check=False)
+    sh(f"nft add rule inet p4wnp1 fwd iifname usb0  oifname {uplink} accept", check=False)
+    sh(f"nft add rule inet p4wnp1 fwd iifname {uplink} oifname usb0 ct state established,related accept", check=False)
+    sh(f"nft add rule inet p4wnp1 post oifname {uplink} masquerade", check=False)
+
+    print(f"NAT: usb0 -> {uplink} enabled.")
+    return 0
+
+def net_share_stop() -> int:
+    need_root()
+    sh("nft delete table inet p4wnp1", check=False)
+    print("NAT: disabled.")
+    return 0
+
 def usb_apply_mode(mode: str) -> int:
     need_root()
     usb_preflight()
@@ -669,21 +944,52 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_hid(), cfg)
         _link(_func_ecm(), cfg)
         _link(_func_rndis(), cfg)
+    elif mode == "hid_acm":
+        _link(_func_hid(), cfg)
+        _link(_func_acm(), cfg)
     elif mode == "hid_rndis":
-        # Windows-friendly VID:PID used widely for RNDIS gadgets
-        _set_vid_pid("0x0525", "0xA4A2")  # NetChip (lab use)
+        _set_vid_pid("0x1d6b", "0x0104")
         _link(_func_hid(), cfg)
         _link(_func_rndis(), cfg)
+    elif mode == "hid_ecm":
+        # macOS/Linux: HID + ECM only
+        _link(_func_hid(), cfg)
+        _link(_func_ecm(), cfg)    
+    elif mode == "hid_ncm":
+        _link(_func_hid(), cfg)
+        _link(_func_ncm(), cfg)
+    elif mode == "hid_storage_ncm":
+        _link(_func_hid(), cfg)
+        _link(_func_ncm(), cfg)
+        _link(_func_msd(), cfg)
+    elif mode == "hid_storage_ecm":
+        _link(_func_hid(), cfg)
+        _link(_func_ecm(), cfg)
+        _link(_func_msd(), cfg)
+    elif mode == "hid_ncm_acm":
+        _link(_func_hid(), cfg)
+        _link(_func_ncm(), cfg)
+        _link(_func_acm(), cfg)
     elif mode == "hid_storage_net":
         _link(_func_hid(), cfg)
         _link(_func_ecm(), cfg)
         _link(_func_rndis(), cfg)
         _link(_func_msd(), cfg)
+    elif mode == "hid_storage_rndis":
+        _set_vid_pid("0x1d6b", "0x0104")
+        _link(_func_hid(), cfg)
+        _link(_func_rndis(), cfg)
+        _link(_func_msd(), cfg) 
     elif mode == "hid_net_acm":
         _link(_func_hid(), cfg)
         _link(_func_ecm(), cfg)
         _link(_func_rndis(), cfg)
         _link(_func_acm(), cfg)
+    elif mode == "hid_rndis_acm":
+        _set_vid_pid("0x1d6b", "0x0104")
+        _link(_func_rndis(), cfg)
+        _link(_func_acm(), cfg)
+        _link(_func_hid(), cfg)
     elif mode == "hid_storage_net_acm":
         _link(_func_hid(), cfg)
         _link(_func_ecm(), cfg)
@@ -692,6 +998,10 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_acm(), cfg)
     elif mode == "storage":
         _link(_func_msd(), cfg)
+    elif mode == "hid":
+        _link(_func_hid(), cfg)
+    elif mode == "serial":
+        _link(_func_acm(), cfg)
     else:
         print(f"Unknown mode: {mode}", file=sys.stderr)
         return 4
@@ -705,22 +1015,84 @@ def usb_apply_mode(mode: str) -> int:
         _bind_first_udc()
     except Exception as e:
         print(f"Bind failed: {e}", file=sys.stderr)
+    # If we intended to have MSD but its link got lost somehow, restore it
+        _ensure_msd_link_present()        
         return 6
 
     _ensure_usb0_ip()
+        # Persist last applied mode
+    try:
+        LAST_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_MODE_FILE.write_text(mode)
+    except Exception:
+        pass
     return 0
 
 def usb_caps_now() -> dict:
-    funcs = USB_GADGET / "functions"
-    def ex(n): return (funcs / n).exists()
-    return {
-        "hid": ex("hid.usb0"),
-        "net": ex("ecm.usb0") or ex("rndis.usb0"),
-        "msd": ex("mass_storage.usb0"),
-        "acm": ex("acm.usb0"),
+    """
+    Detect currently ACTIVE functions by inspecting the c.1 config links,
+    not by the presence of function directories.
+    """
+    cfg = USB_GADGET / "configs" / "c.1"
+    def linked(name: str) -> bool:
+        return (cfg / name).exists()
+    caps = {
+        "hid":   linked("hid.usb0"),
+        "rndis": linked("rndis.usb0"),
+        "ecm":   linked("ecm.usb0"),
+        "ncm":   linked("ncm.usb0"),
+        "msd":   linked("mass_storage.usb0"),
+        "acm":   linked("acm.usb0"),
     }
+    caps["net"] = caps["rndis"] or caps["ecm"] or caps["ncm"] 
+    return caps
 
-def usb_compose_apply(hid: bool, net: bool, msd: bool, acm: bool = False) -> int:
+def _iface_carrier(ifname="usb0") -> bool:
+    p = Path(f"/sys/class/net/{ifname}/carrier")
+    try:
+        return p.exists() and p.read_text().strip() == "1"
+    except Exception:
+        return False
+
+def usb_auto(timeout_sec: int = 8) -> int:
+    """
+    Try in order: RNDIS (Windows), NCM (Windows 10/11, macOS, Linux), ECM (macOS/Linux).
+    Uses link-carrier as success signal (driver must bind on host).
+    """
+    print("Auto: trying HID+RNDIS...")
+    rc = usb_apply_mode("hid_rndis")
+    if rc != 0:
+        return rc
+    for _ in range(timeout_sec * 10):
+        if _iface_carrier("usb0"):
+            print("Auto: RNDIS linked.")
+            return 0
+        time.sleep(0.1)
+
+    print("Auto: no RNDIS link, trying HID+NCM...")
+    rc = usb_apply_mode("hid_ncm")
+    if rc != 0:
+        return rc
+    for _ in range(timeout_sec * 10):
+        if _iface_carrier("usb0"):
+            print("Auto: NCM linked.")
+            return 0
+        time.sleep(0.1)
+
+    print("Auto: no NCM link, trying HID+ECM...")
+    rc = usb_apply_mode("hid_ecm")
+    if rc != 0:
+        return rc
+    for _ in range(timeout_sec * 10):
+        if _iface_carrier("usb0"):
+            print("Auto: ECM linked.")
+            return 0
+        time.sleep(0.1)
+
+    print("Auto: no link established; leaving HID+ECM active.")
+    return 1
+
+def usb_compose_apply(hid: bool, net: bool, msd: bool, acm: bool = False, nettype: str = "all") -> int:
     """
     Build gadget with requested functions. Extends presets without new shell scripts.
     """
@@ -733,8 +1105,9 @@ def usb_compose_apply(hid: bool, net: bool, msd: bool, acm: bool = False) -> int
 
     if hid: _link(_func_hid(), cfg)
     if net:
-        _link(_func_ecm(), cfg)
-        _link(_func_rndis(), cfg)
+        if nettype in ("all", "ecm"):   _link(_func_ecm(), cfg)
+        if nettype in ("all", "rndis"): _link(_func_rndis(), cfg)
+        if nettype in ("all", "ncm"):   _link(_func_ncm(),   cfg)
     if msd: _link(_func_msd(), cfg)
     if acm: _link(_func_acm(), cfg)
     if net:
@@ -765,30 +1138,40 @@ def usb_status_text() -> str:
 
     hid   = (funcs / "hid.usb0").exists()
     rndis = (funcs / "rndis.usb0").exists()
+    ncm   = (funcs / "ncm.usb0").exists()
     ecm   = (funcs / "ecm.usb0").exists()
     msd   = (funcs / "mass_storage.usb0").exists()
     acm   = (funcs / "acm.usb0").exists()
 
-    if msd and (hid and (rndis or ecm)):
-        mode = "hid_storage_net"
-    elif hid and (rndis or ecm):
-        mode = "hid_net"
-    elif msd and not any([hid, rndis, ecm]):
-        mode = "storage"
-    else:
-        mode = "custom/unknown"
+    # derive explicit mode name
+    if    hid and not (rndis or ncm or ecm or msd or acm):          mode = "hid"
+    elif  msd and not (hid or rndis or ncm or ecm or acm):          mode = "storage"
+    elif  acm and not (hid or rndis or ncm or ecm or msd):          mode = "serial"
+    elif  hid and acm and not (rndis or ncm or ecm or msd):         mode = "hid_acm"
+    elif  hid and  rndis and not (ncm or ecm or msd or acm):        mode = "hid_rndis"
+    elif  hid and  ncm   and not (rndis or ecm or msd or acm):      mode = "hid_ncm"
+    elif  hid and  ecm   and not (rndis or ncm or msd or acm):      mode = "hid_ecm"
+    elif  hid and  rndis and      (not ncm) and (not ecm) and acm:  mode = "hid_rndis_acm"
+    elif  hid and  ncm   and      (not rndis) and (not ecm) and acm:mode = "hid_ncm_acm"
+    elif  hid and (rndis or ncm or ecm) and acm and not msd:        mode = "hid_net_acm"
+    elif  hid and  rndis and not (ncm or ecm) and msd and not acm:  mode = "hid_storage_rndis"
+    elif  hid and  ncm   and not (rndis or ecm) and msd and not acm:mode = "hid_storage_ncm"
+    elif  hid and  ecm   and not (rndis or ncm) and msd and not acm:mode = "hid_storage_ecm"
+    elif  hid and (rndis or ncm or ecm) and msd and not acm:        mode = "hid_storage_net"
+    else:                                                           mode = "custom/unknown"
 
     parts = []
     if hid: parts.append("HID")
-    if rndis or ecm: parts.append("NET")
+    if rndis or ncm or ecm: parts.append("NET")
     if msd: parts.append("MSD")
     if acm: parts.append("SER")
+
     lines = [f"USB: {mode} ({'+'.join(parts) if parts else 'none'})"]
-    for c in ["c.1", "c.2"]:
+    for c in ["c.1"]:
         cdir = USB_GADGET / "configs" / c
         if cdir.exists():
             links = []
-            for name in ["hid.usb0","rndis.usb0","ecm.usb0","mass_storage.usb0","acm.usb0"]:
+            for name in ["hid.usb0","rndis.usb0","ncm.usb0","ecm.usb0","mass_storage.usb0","acm.usb0"]:
                 if (cdir / name).exists(): links.append(name.split(".")[0])
             lines.append(f" {c}: {('+'.join(links) if links else 'n/a')}")
     return "\n".join(lines)
@@ -812,6 +1195,19 @@ def usb_fixperms() -> int:
                 print(f"[!] chmod {p} failed: {e}", file=sys.stderr)
     print(f"HID perms adjusted on {changed} device(s).")
     return 0
+
+def usb_serial_enable() -> int:
+    need_root()
+    return systemctl("enable", "--now", "serial-getty@ttyGS0.service").returncode
+
+def usb_serial_disable() -> int:
+    need_root()
+    return systemctl("disable", "--now", "serial-getty@ttyGS0.service").returncode
+
+def usb_serial_status() -> int:
+    st = systemctl("is-active", "serial-getty@ttyGS0.service").stdout.strip() or "unknown"
+    en = systemctl("is-enabled", "serial-getty@ttyGS0.service").stdout.strip() or "unknown"
+    print(f"serial-getty@ttyGS0: {st} ({en})"); return 0
 
 # --- Wi-Fi AP (hostapd + dnsmasq), pure Python --------------------------------
 
@@ -1551,11 +1947,15 @@ USB gadget controls
 -------------------
 Commands:
   usb status
+  usb auto                        # tries RNDIS → NCM → ECM
   usb prep                        # add dwc2 overlay + modules-load; reboot afterwards
-  usb replug                     # unbind/rebind UDC (simulate unplug/replug)
+  usb replug                      # unbind/rebind UDC (or rebuild if busy)
   usb fixperms                    # chmod 0666 /dev/hidg* (quick test)
-  usb set {hid_net|hid_net_acm|hid_storage_net|hid_storage_net_acm|storage}
-  usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1]
+  usb inf write                   # drop an INF onto the MSD for Windows
+  usb dhcp {start|stop|status}
+  usb serial {enable|disable|status}
+  usb set {hid_net|hid_rndis|hid_ecm|hid_ncm|hid_net_acm|hid_rndis_acm|hid_storage_net|hid_storage_rndis|hid_storage_ncm|hid_storage_net_acm|storage}
+  usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1] [--nettype=rndis|ncm|ecm|all]
 """)
 
 WIFI_HELP = dedent("""\
@@ -1605,6 +2005,15 @@ Usage:
   p4wnctl service <install|uninstall|start|stop|restart|enable|disable|status|logs> <unit>
 """)
 
+NET_HELP = dedent("""\
+Network share
+-------------
+Commands:
+  net share <uplink>     # enable DHCP on usb0 + NAT out via <uplink> (e.g. wlan0)
+  net unshare            # stop NAT/DHCP
+  net status             # show NAT/DHCP status
+""")
+
 # ======= CLI parsing =======
 def main() -> int:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
@@ -1621,27 +2030,63 @@ def main() -> int:
         if sub == "prep":     return usb_prep()
         if sub == "replug":   return usb_replug()
         if sub == "fixperms":  return usb_fixperms()
+        if sub == "replug":   return usb_replug()
+        if sub == "auto":     return usb_auto()
+
         if sub == "set":
             if len(sys.argv) < 4:
                 print(USB_HELP.rstrip()); return 1
             return usb_set(sys.argv[3])
+        
+        if sub == "inf":
+            if len(sys.argv) == 4 and sys.argv[3] == "write":
+                return usb_inf_write()
+                print("usage: p4wnctl usb inf write"); return 1
+
+        if sub == "dhcp":
+            if len(sys.argv) == 4 and sys.argv[3] in ("start","stop","status"):
+                return {"start": usb_dhcp_start, "stop": usb_dhcp_stop, "status": usb_dhcp_status}[sys.argv[3]]()
+            print("usage: p4wnctl usb dhcp {start|stop|status}"); return 1
+
+        if sub == "serial":
+            if len(sys.argv) == 4 and sys.argv[3] in ("enable","disable","status"):
+                return {"enable": usb_serial_enable, "disable": usb_serial_disable, "status": usb_serial_status}[sys.argv[3]]()
+            print("usage: p4wnctl usb serial {enable|disable|status}"); return 1
+
         if sub == "compose":
-            # Usage: p4wnctl usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1]
-            def pbool(name):
+        # Usage: p4wnctl usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1] [--nettype=rndis|ncm|ecm|all]
+            def pstr(name, default=None):
                 for a in sys.argv[3:]:
                     if a.startswith(f"--{name}="):
-                        v = a.split("=",1)[1].strip().lower()
-                        if v in ("1","true","on","yes"):  return True
-                        if v in ("0","false","off","no"): return False
-                return None
-            caps = usb_caps_now()
-            hid = pbool("hid"); net = pbool("net"); msd = pbool("msd"); acm = pbool("acm")
+                        return a.split("=", 1)[1].strip()
+                return default
+
+            def pbool(name):
+                v = pstr(name, None)
+                if v is None:
+                    return None
+                v = v.lower()
+                return v in ("1", "true", "yes", "on", "y")
+
+            caps = usb_caps_now()  # current active links (hid/net/msd/acm) :contentReference[oaicite:0]{index=0}
+
+            hid = pbool("hid")
+            net = pbool("net")
+            msd = pbool("msd")
+            acm = pbool("acm")
+            nettype = (pstr("nettype", "all") or "all").lower()
+            if nettype not in ("all", "rndis", "ncm", "ecm"):
+                print("nettype must be one of: rndis|ncm|ecm|all", file=sys.stderr)
+                return 1
+
             return usb_compose_apply(
                 caps["hid"] if hid is None else hid,
                 caps["net"] if net is None else net,
                 caps["msd"] if msd is None else msd,
-                caps["acm"] if acm is None else acm
+                caps["acm"] if acm is None else acm,
+                nettype=nettype
             )
+        
         print(USB_HELP.rstrip()); return 1
 
     if cmd == "wifi":
@@ -1722,6 +2167,26 @@ def main() -> int:
                     print(WEB_HELP.rstrip()); return 1
                 return web_config_set(host, port)
         print(WEB_HELP.rstrip()); return 1
+
+    # net
+    if cmd == "net":
+        if len(sys.argv) == 2:
+            print(NET_HELP); return 0
+        sub = sys.argv[2]
+        if sub == "share" and len(sys.argv) >= 4:
+            rc = usb_dhcp_start()
+            if rc != 0: return rc
+            return net_share_start(sys.argv[3])
+        if sub == "unshare":
+            usb_dhcp_stop()
+            return net_share_stop()
+        if sub == "status":
+            usb_dhcp_status()
+            # show nft presence
+            rc = sh("nft list table inet p4wnp1", check=False)
+            print("NAT:", "enabled" if rc.returncode == 0 else "disabled")
+            return 0
+        print(NET_HELP); return 1
 
     # service
     if cmd == "service":

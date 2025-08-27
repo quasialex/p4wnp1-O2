@@ -1,15 +1,27 @@
 [Unit]
-Description=P4wnP1-O2 base service (no auto-payload)
-After=network-online.target p4wnp1-usb-prep.service
-Wants=network-online.target
+Description=P4wnP1-O2 (USB + OLED + WebUI)
+After=network-online.target sys-kernel-config.mount
+Wants=network-online.target sys-kernel-config.mount
 
 [Service]
 Type=simple
 Environment=P4WN_HOME=/opt/p4wnp1
-# Minimal: keep process alive, log a banner
-ExecStart=/usr/bin/env bash -c 'echo "[P4wnP1] Ready"; sleep infinity'
-WorkingDirectory=/opt/p4wnp1
-Restart=always
+# Prep (no separate unit needed)
+ExecStartPre=/sbin/modprobe configfs
+ExecStartPre=/bin/mount -t configfs none /sys/kernel/config
+ExecStartPre=/sbin/modprobe dwc2
+ExecStartPre=/sbin/modprobe libcomposite
+# Bring up USB early (auto = RNDIS then ECM if no link)
+ExecStartPre=/usr/bin/env python3 /opt/p4wnp1/p4wnctl.py usb auto
+ExecStartPre=/usr/bin/env python3 /opt/p4wnp1/p4wnctl.py net share wlan0
+# Long-running processes (keep the service alive)
+ExecStart=/usr/bin/env bash -lc '
+  /usr/bin/env python3 /opt/p4wnp1/webui/app.py & 
+  echo "[P4wnP1] Ready"; 
+  wait -n
+'
+Restart=on-failure
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target
