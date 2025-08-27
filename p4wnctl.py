@@ -3,6 +3,7 @@
 import os
 import sys
 import json
+import time
 import curses
 import socket
 import subprocess
@@ -41,20 +42,27 @@ SERVICE_UNITS = [
 ]
 
 # Defaults for gadget network and MSD
+AP_SSID   = os.environ.get("P4WN_AP_SSID", "P4WNP1")
+AP_PSK    = os.environ.get("P4WN_AP_PSK", "p4wnp1o2")  # 8+ chars
+AP_CIDR   = os.environ.get("P4WN_AP_CIDR", "172.24.0.1/24")
+AP_NET    = "172.24.0.0/24"
+AP_CHAN   = int(os.environ.get("P4WN_AP_CHAN", "6"))
+AP_COUNTRY= os.environ.get("P4WN_AP_COUNTRY", "US")    # set to your locale if needed
 USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
 USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
 USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")
 MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
 MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "128"))
 
+
 # Presets for the TUI selector
 USB_CHOICES = [
-    ("HID + NET", "hid_net_only"),
+    ("HID + NET", "hid_net"),
+    ("HID + RNDIS (Windows)", "hid_rndis"), 
     ("HID + NET + SER (ACM)", "hid_net_acm"),
     ("HID + NET + MSD", "hid_storage_net"),
     ("HID + NET + MSD + SER", "hid_storage_net_acm"),
-    ("Storage Only", "storage_only"),
-
+    ("Storage Only", "storage"),
 ]
 
 # ======= Small helpers =======
@@ -76,13 +84,15 @@ def last_line(txt: str) -> str:
             return ln
     return ""
 
-def ensure_mass_storage_image(img="/opt/p4wnp1/config/usb_mass_storage.img", size_mb=256):
-    import subprocess, os
-    os.makedirs(os.path.dirname(img), exist_ok=True)
-    if not os.path.exists(img) or os.path.getsize(img) < size_mb*1024*1024:
-        subprocess.run(["truncate", "-s", f"{size_mb}M", img], check=True)
-        subprocess.run(["mkfs.vfat", "-F", "32", "-n", "P4WNP1", img], check=True)
-    return img
+def ensure_mass_storage_image(img=str(MSD_IMAGE), size_mb=MSD_SIZE_MB):
+    """
+    Back-compat wrapper. Sets MSD_IMAGE/MSD_SIZE_MB then calls _ensure_msd_image().
+    """
+    global MSD_IMAGE, MSD_SIZE_MB
+    MSD_IMAGE = Path(img)
+    MSD_SIZE_MB = int(size_mb)
+    _ensure_msd_image()
+    return str(MSD_IMAGE)
 
 def which(path: str) -> str | None:
     for d in os.environ.get("PATH", "").split(os.pathsep):
@@ -275,9 +285,179 @@ def usb_preflight():
     uds = Path("/sys/class/udc")
     if not uds.exists() or not any(uds.iterdir()):
         print("[!] No USB Device Controller under /sys/class/udc.\n"
-              "    Add 'dtoverlay=dwc2' to /boot/config.txt and reboot.",
+              "    Enable the USB OTG controller and reboot.\n"
+              "    EITHER run: p4wnctl usb prep\n"
+              "    OR add: dtoverlay=dwc2,dr_mode=peripheral to /boot/firmware/config.txt and reboot.",
               file=sys.stderr)
         sys.exit(3)
+
+def _boot_config_candidates() -> list[Path]:
+    return [Path("/boot/firmware/config.txt"), Path("/boot/config.txt")]
+
+def _boot_config_path() -> Path | None:
+    for p in _boot_config_candidates():
+        if p.exists():
+            return p
+    return None
+
+def _disable_otg_mode(lines: list[str]) -> tuple[list[str], bool]:
+    """
+    Comment out any 'otg_mode=...' lines (Bookworm defaults often set otg_mode=1).
+    Returns (new_lines, changed)
+    """
+    changed = False
+    out = []
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("otg_mode="):
+            # comment it so users can see the prior value
+            out.append(f"# P4wnP1-O2 disabled: {ln}".rstrip())
+            changed = True
+        else:
+            out.append(ln)
+    return out, changed
+
+def _ensure_peripheral_under_all() -> tuple[bool, str]:
+    """
+    Ensure dtoverlay=dwc2,dr_mode=peripheral exists under an [all] section
+    in /boot/firmware/config.txt (fallback to /boot/config.txt).
+    Also disables any otg_mode=... lines.
+    Returns (changed, path_str)
+    """
+    p = _boot_config_path()
+    if not p:
+        return (False, "(no config.txt found)")
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+
+    # 1) Disable otg_mode
+    lines, ch_otg = _disable_otg_mode(lines)
+
+    # 2) Find last [all] section
+    all_idxs = [i for i, ln in enumerate(lines) if ln.strip().lower() == "[all]"]
+    if all_idxs:
+        start = all_idxs[-1] + 1
+        # find end of this section (next [section] or EOF)
+        end = next((i for i in range(start, len(lines)) if lines[i].strip().startswith("[") and lines[i].strip().endswith("]")), len(lines))
+
+        # scan for existing dwc2 line inside this [all]
+        dwc_idx = None
+        for i in range(start, end):
+            if lines[i].strip().startswith("dtoverlay=dwc2"):
+                dwc_idx = i
+                break
+
+        desired = "dtoverlay=dwc2,dr_mode=peripheral"
+        ch_overlay = False
+        if dwc_idx is None:
+            lines.insert(end, desired)
+            ch_overlay = True
+        else:
+            s = lines[dwc_idx].strip()
+            if "dr_mode=peripheral" not in s:
+                lines[dwc_idx] = desired
+                ch_overlay = True
+    else:
+        # no [all] — append a fresh section at the end
+        desired = ["", "# Added by P4wnP1-O2 usb prep", "[all]", "dtoverlay=dwc2,dr_mode=peripheral"]
+        lines.extend(desired)
+        ch_overlay = True
+
+    changed = ch_otg or ch_overlay
+    if changed:
+        need_root()
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return (changed, str(p))
+
+def _ensure_modules_load_conf() -> tuple[bool, str]:
+    """
+    Ensure /etc/modules-load.d/p4wnp1-usb.conf loads dwc2 and libcomposite.
+    Returns (changed, path_str).
+    """
+    path = Path("/etc/modules-load.d/p4wnp1-usb.conf")
+    desired = "dwc2\nlibcomposite\n"
+    cur = path.read_text() if path.exists() else ""
+    if cur != desired:
+        need_root()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(desired)
+        return (True, str(path))
+    return (False, str(path))
+
+def usb_prep() -> int:
+    """
+    Prepare the system for USB gadget mode (dwc2 overlay + modules-load).
+    Requires a reboot to take effect.
+    """
+    need_root()
+    # Make sure configfs is available now (harmless if already active)
+    sh("modprobe configfs || true", check=False)
+    sh("mount -t configfs none /sys/kernel/config || true", check=False)
+
+    ch1, cfgp = _ensure_peripheral_under_all()
+    ch2, mlp  = _ensure_modules_load_conf()
+
+    print(f"Boot config: {cfgp} {'(updated)' if ch1 else '(ok)'}")
+    print(f"Modules-load: {mlp} {'(updated)' if ch2 else '(ok)'}")
+    print("\nReboot required for the USB Device Controller (UDC) to appear.")
+    print("After reboot, run:  p4wnctl usb set hid_net")
+    return 0
+
+def usb_replug() -> int:
+    """
+    Re-enumerate without physically unplugging.
+    1) Try clean unbind/rebind of the current UDC.
+    2) If EBUSY or anything fails, rebuild the gadget with the same caps.
+    """
+    need_root()
+    udc_file = USB_GADGET / "UDC"
+    if not udc_file.exists():
+        print("[!] No gadget bound (UDC file missing).", file=sys.stderr)
+        return 2
+
+    # Try the simple unbind/rebind
+    try:
+        current = udc_file.read_text().strip()
+    except Exception:
+        current = ""
+    try:
+        udc_file.write_text("")          # unbind
+        time.sleep(0.5)
+        udcs = sorted([p.name for p in Path("/sys/class/udc").iterdir()])
+        reb = current if current in udcs else (udcs[0] if udcs else "")
+        if not reb:
+            print("[!] No UDC available to rebind.", file=sys.stderr)
+            return 4
+        udc_file.write_text(reb)         # rebind
+        print(f"Replugged on UDC: {reb}")
+        return 0
+    except OSError as e:
+        # Fallback path: rebuild gadget to simulate a plug cycle
+        print(f"[*] Clean replug failed ({e}). Rebuilding gadget…", file=sys.stderr)
+
+    # Rebuild using current function set
+    caps = usb_caps_now()
+    # fully tear down and re-apply same caps
+    try:
+        usb_force_reset()
+        usb_teardown()
+        _gadget_common_init()
+        cfg = USB_GADGET / "configs/c.1"
+        if caps.get("hid"):  _link(_func_hid(), cfg)
+        if caps.get("net"):
+            _link(_func_ecm(), cfg)
+            _link(_func_rndis(), cfg)
+        if caps.get("msd"):  _link(_func_msd(), cfg)
+        if caps.get("acm"):  _link(_func_acm(), cfg)
+        if caps.get("net"):
+            _enable_ms_os_desc_for_rndis("c.1", "rndis.usb0")
+        _bind_first_udc()
+        _ensure_usb0_ip()
+        print("Replugged by rebuild.")
+        return 0
+    except Exception as e2:
+        print(f"[!] Replug (rebuild) failed: {e2}", file=sys.stderr)
+        return 1
 
 def _hid_report_desc_bytes() -> bytes:
     return bytes([
@@ -292,11 +472,20 @@ def _hid_report_desc_bytes() -> bytes:
     ])
 
 def _ensure_msd_image():
-    if MSD_IMAGE.exists():
-        return
+    """
+    Ensure MSD image exists at MSD_IMAGE with size MSD_SIZE_MB and is FAT32 formatted.
+    """
     MSD_IMAGE.parent.mkdir(parents=True, exist_ok=True)
-    with open(MSD_IMAGE, "wb") as f:
-        f.truncate(MSD_SIZE_MB * 1024 * 1024)
+    target_sz = MSD_SIZE_MB * 1024 * 1024
+    need_create = (not MSD_IMAGE.exists()) or (MSD_IMAGE.stat().st_size < target_sz)
+    if need_create:
+        # (Re)create image file
+        with open(MSD_IMAGE, "wb") as f:
+            f.truncate(target_sz)
+        # Try to format as FAT32 (mkfs.vfat or mkdosfs). If unavailable, leave raw.
+        mkfs = which("mkfs.vfat") or which("mkdosfs")
+        if mkfs:
+            sh(f'{mkfs} -F 32 -n P4WNP1 "{MSD_IMAGE}"', check=False)
 
 def _unlink_all(cfg_dir: Path):
     for l in list(cfg_dir.iterdir()):
@@ -355,6 +544,9 @@ def _gadget_common_init():
     _write(USB_GADGET / "idProduct", "0x0104")
     _write(USB_GADGET / "bcdDevice", "0x0100")
     _write(USB_GADGET / "bcdUSB", "0x0200")
+    _write(USB_GADGET / "bDeviceClass",    "0xEF") 
+    _write(USB_GADGET / "bDeviceSubClass", "0x02")
+    _write(USB_GADGET / "bDeviceProtocol", "0x01")
     s = USB_GADGET / "strings/0x409"
     _write(s / "serialnumber", "P4wnP1-O2")
     _write(s / "manufacturer", "quasialex")
@@ -362,6 +554,36 @@ def _gadget_common_init():
     cfg = USB_GADGET / "configs/c.1"
     _write(cfg / "MaxPower", "250")
     _write(USB_GADGET / "configs/c.1/strings/0x409/configuration", "Config 1")
+    # MS OS descriptors (global)
+    osd = USB_GADGET / "os_desc"
+    try:
+        _write(osd / "b_vendor_code", "0xcd")   # any non-zero vendor-specific code
+        _write(osd / "qw_sign", "MSFT100")
+        _write(osd / "use", "1")
+    except Exception:
+        pass
+
+def _set_vid_pid(vid: str, pid: str):
+    """
+    Override vendor/product IDs (must be called before binding the UDC).
+    """
+    _write(USB_GADGET / "idVendor", vid)
+    _write(USB_GADGET / "idProduct", pid)
+
+def _enable_ms_os_desc_for_rndis(config_name="c.1", func_name="rndis.usb0"):
+    """
+    Link the active config into os_desc (required for Windows to see MSFT100).
+    Call after configs exist but before binding the UDC.
+    """
+    osd = USB_GADGET / "os_desc"
+    link_target = USB_GADGET / "configs" / config_name
+    link_name   = osd / config_name
+    try:
+        if link_name.exists() or link_name.is_symlink():
+            link_name.unlink()
+        os.symlink(link_target, link_name)
+    except Exception as e:
+        print(f"[!] os_desc link failed: {e}", file=sys.stderr)
 
 def _func_hid():
     f = USB_GADGET / "functions/hid.usb0"
@@ -384,6 +606,27 @@ def _func_rndis():
     f.mkdir(parents=True, exist_ok=True)
     _write(f / "dev_addr", USB_NET_DEVADDR)
     _write(f / "host_addr", USB_NET_HOSTADDR)
+
+    # --- MS OS descriptors (interface level; must happen BEFORE linking) ---
+    intf = f / "os_desc" / "interface.rndis"
+    if intf.exists():
+        try:
+            _write(intf / "compatible_id", "RNDIS")
+            _write(intf / "sub_compatible_id", "5162001")
+        except Exception:
+            pass
+    else:
+        # fallback for older kernels exposing files directly under f/os_desc
+        f_osd = f / "os_desc"
+        if f_osd.exists():
+            try:
+                _write(f_osd / "compatible_id", "RNDIS")
+                _write(f_osd / "sub_compatible_id", "5162001")
+                _write(f_osd / "use", "1")
+            except Exception:
+                pass
+    # -----------------------------------------------------------------------
+
     return f
 
 def _func_msd():
@@ -422,9 +665,14 @@ def usb_apply_mode(mode: str) -> int:
     usb_teardown()
     _gadget_common_init()
 
-    if mode == "hid_net_only":
+    if mode == "hid_net":
         _link(_func_hid(), cfg)
         _link(_func_ecm(), cfg)
+        _link(_func_rndis(), cfg)
+    elif mode == "hid_rndis":
+        # Windows-friendly VID:PID used widely for RNDIS gadgets
+        _set_vid_pid("0x0525", "0xA4A2")  # NetChip (lab use)
+        _link(_func_hid(), cfg)
         _link(_func_rndis(), cfg)
     elif mode == "hid_storage_net":
         _link(_func_hid(), cfg)
@@ -442,11 +690,16 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_rndis(), cfg)
         _link(_func_msd(), cfg)
         _link(_func_acm(), cfg)
-    elif mode == "storage_only":
+    elif mode == "storage":
         _link(_func_msd(), cfg)
     else:
         print(f"Unknown mode: {mode}", file=sys.stderr)
         return 4
+
+    # --- MS OS descriptors for Windows RNDIS ---
+    if (USB_GADGET / "functions" / "rndis.usb0").exists():
+        _enable_ms_os_desc_for_rndis("c.1", "rndis.usb0")
+    # -------------------------------------------
 
     try:
         _bind_first_udc()
@@ -484,6 +737,8 @@ def usb_compose_apply(hid: bool, net: bool, msd: bool, acm: bool = False) -> int
         _link(_func_rndis(), cfg)
     if msd: _link(_func_msd(), cfg)
     if acm: _link(_func_acm(), cfg)
+    if net:
+        _enable_ms_os_desc_for_rndis("c.1", "rndis.usb0")
 
     try:
         _bind_first_udc()
@@ -517,9 +772,9 @@ def usb_status_text() -> str:
     if msd and (hid and (rndis or ecm)):
         mode = "hid_storage_net"
     elif hid and (rndis or ecm):
-        mode = "hid_net_only"
+        mode = "hid_net"
     elif msd and not any([hid, rndis, ecm]):
-        mode = "storage_only"
+        mode = "storage"
     else:
         mode = "custom/unknown"
 
@@ -540,6 +795,124 @@ def usb_status_text() -> str:
 
 def usb_status(_args=None) -> int:
     print(usb_status_text()); return 0
+
+def usb_fixperms() -> int:
+    """
+    Make /dev/hidg* world-writable for quick testing (use udev for a permanent rule).
+    """
+    need_root()
+    changed = 0
+    for i in range(8):
+        p = Path(f"/dev/hidg{i}")
+        if p.exists():
+            try:
+                os.chmod(p, 0o666)
+                changed += 1
+            except Exception as e:
+                print(f"[!] chmod {p} failed: {e}", file=sys.stderr)
+    print(f"HID perms adjusted on {changed} device(s).")
+    return 0
+
+# --- Wi-Fi AP (hostapd + dnsmasq), pure Python --------------------------------
+
+def _hostapd_conf() -> str:
+    return f"""\
+    interface=wlan0
+    driver=nl80211
+    ssid={AP_SSID}
+    hw_mode=g
+    channel={AP_CHAN}
+    wmm_enabled=1
+    ieee80211n=1
+    ieee80211d=1
+    country_code={AP_COUNTRY}
+    auth_algs=1
+    wpa=2
+    wpa_key_mgmt=WPA-PSK
+    rsn_pairwise=CCMP
+    wpa_passphrase={AP_PSK}
+    """
+
+def _dnsmasq_conf() -> str:
+    # hand out 172.24.0.100..172.24.0.200, router 172.24.0.1
+    return f"""\
+    interface=wlan0
+    bind-interfaces
+    domain-needed
+    bogus-priv
+    dhcp-range=172.24.0.100,172.24.0.200,255.255.255.0,12h
+    dhcp-option=3,172.24.0.1
+    dhcp-option=6,8.8.8.8,1.1.1.1
+    log-queries
+    log-dhcp
+    """
+
+def _write_ap_configs():
+    need_root()
+    hp = Path("/etc/hostapd/hostapd-p4wnp1.conf")
+    dp = Path("/etc/dnsmasq.d/p4wnp1.conf")
+    hp.parent.mkdir(parents=True, exist_ok=True)
+    dp.parent.mkdir(parents=True, exist_ok=True)
+    hp.write_text(_hostapd_conf())
+    dp.write_text(_dnsmasq_conf())
+    return str(hp), str(dp)
+
+def wifi_ap_start() -> int:
+    need_root()
+    # sanity: tools present?
+    if not which("hostapd"):
+        print("[!] hostapd not installed", file=sys.stderr); return 2
+    if not which("dnsmasq"):
+        print("[!] dnsmasq not installed", file=sys.stderr); return 2
+
+    # stop client supplicant if it’s holding wlan0
+    sh("systemctl stop wpa_supplicant@wlan0.service 2>/dev/null || true", check=False)
+
+    # unblock and bring wlan0 up with static IP
+    sh("rfkill unblock wifi || true", check=False)
+    ip = which("ip") or "/sbin/ip"
+    sh(f"{ip} link set wlan0 down || true", check=False)
+    sh(f"{ip} addr flush dev wlan0 || true", check=False)
+    sh(f"{ip} addr add {AP_CIDR} dev wlan0", check=False)
+    sh(f"{ip} link set wlan0 up", check=False)
+
+    # write configs
+    hostapd_conf, dnsmasq_conf = _write_ap_configs()
+
+    # point hostapd to our config and start services
+    # use transient systemd units so we don't ship static files
+    sh(f"systemctl stop hostapd dnsmasq 2>/dev/null || true", check=False)
+
+    # hostapd
+    sh(f"systemctl start hostapd", check=False)
+    # ensure it reads our file
+    Path("/etc/default/hostapd").write_text(f'DAEMON_CONF="{hostapd_conf}"\n')
+
+    # dnsmasq uses drop-in in /etc/dnsmasq.d/, just restart
+    sh("systemctl restart dnsmasq", check=False)
+
+    # quick up-check
+    h = sh("systemctl is-active hostapd", check=False).stdout.strip()
+    d = sh("systemctl is-active dnsmasq", check=False).stdout.strip()
+    print(f"AP: hostapd={h or 'unknown'}, dnsmasq={d or 'unknown'}")
+    print(f"SSID: {AP_SSID} / PSK: {AP_PSK} / CIDR: {AP_CIDR}")
+    return 0
+
+def wifi_ap_stop() -> int:
+    need_root()
+    sh("systemctl stop hostapd 2>/dev/null || true", check=False)
+    sh("systemctl stop dnsmasq 2>/dev/null || true", check=False)
+    # leave wlan0 as-is; client mode can reclaim it
+    print("AP: stopped")
+    return 0
+
+def wifi_status() -> int:
+    ip = which("ip") or "/sbin/ip"
+    ss = sh(f"{ip} -4 addr show wlan0", check=False).stdout or ""
+    h = sh("systemctl is-active hostapd", check=False).stdout.strip()
+    d = sh("systemctl is-active dnsmasq", check=False).stdout.strip()
+    print(f"Wi-Fi: wlan0\n{ss.strip()}\nServices: hostapd={h or 'unknown'}, dnsmasq={d or 'unknown'}")
+    return 0
 
 def usb_set(mode: str) -> int:
     # Guard: do not change gadget if the *default route* is on usb*, unless forced
@@ -1171,7 +1544,6 @@ Subcommands:
   service     Manage systemd units (install/uninstall/start/stop/...)
   ip          Show IPs (also: ip primary | ip env | ip json)
   template    Render a text file replacing __HOST__ with device IP
-  menu        Interactive menu (arrow keys)
 """)
 
 USB_HELP = dedent("""\
@@ -1179,9 +1551,23 @@ USB gadget controls
 -------------------
 Commands:
   usb status
-  usb set {hid_net_only|hid_storage_net|storage_only}
-  usb set {hid_net_only|hid_net_acm|hid_storage_net|hid_storage_net_acm|storage_only}
+  usb prep                        # add dwc2 overlay + modules-load; reboot afterwards
+  usb replug                     # unbind/rebind UDC (simulate unplug/replug)
+  usb fixperms                    # chmod 0666 /dev/hidg* (quick test)
+  usb set {hid_net|hid_net_acm|hid_storage_net|hid_storage_net_acm|storage}
   usb compose --hid=0|1 --net=0|1 --msd=0|1 [--acm=0|1]
+""")
+
+WIFI_HELP = dedent("""\
+Wi-Fi controls
+--------------
+Commands:
+  wifi status
+  wifi ap start
+  wifi ap stop
+
+Environment overrides:
+  P4WN_AP_SSID, P4WN_AP_PSK, P4WN_AP_CIDR, P4WN_AP_CHAN, P4WN_AP_COUNTRY
 """)
 
 PAYLOAD_HELP = dedent("""\
@@ -1219,183 +1605,6 @@ Usage:
   p4wnctl service <install|uninstall|start|stop|restart|enable|disable|status|logs> <unit>
 """)
 
-# ======= Curses TUI (arrow-driven) =======
-class MenuItem:
-    def __init__(self, label, kind, data=None, status_fn=None):
-        self.label = label
-        self.kind = kind  # 'submenu' | 'action' | 'selector' | 'status'
-        self.data = data or {}
-        self.status_fn = status_fn  # callable -> str
-
-class MenuState:
-    def __init__(self, title, items):
-        self.title = title
-        self.items = items
-        self.idx = 0
-        self.sel_idx = {}
-
-    def current(self):
-        if not self.items: return None
-        return self.items[self.idx]
-
-def draw_menu(stdscr, state: MenuState, toast: str = ""):
-    stdscr.clear()
-    h, w = stdscr.getmaxyx()
-    def add(y, x, s, attr=0):
-        if 0 <= y < h:
-            stdscr.addnstr(y, x, s, max(1, w-1-x), attr)
-
-    add(0, 0, state.title, curses.A_BOLD)
-    add(1, 0, "↑↓ move   ← back   →/Enter select", curses.A_DIM)
-
-    status_lines = []
-    cur = state.current()
-    if cur and cur.status_fn:
-        try:
-            block = cur.status_fn() or ""
-            status_lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
-        except Exception:
-            status_lines = []
-
-    max_status = min(3, max(0, h - 8))
-    used = 0
-    for i, ln in enumerate(status_lines[:max_status]):
-        add(2 + i, 0, ln)
-        used += 1
-
-    top = 4 + used
-
-    for i, it in enumerate(state.items):
-        prefix = "> " if i == state.idx else "  "
-        label = it.label
-        if it.kind == "selector":
-            curpos = state.sel_idx.get(id(it), 0)
-            choices = it.data.get("choices", [])
-            if choices:
-                lab = choices[curpos][0]
-                label = f"{label}: {lab}"
-        add(top + i, 0, prefix + label, curses.A_REVERSE if i == state.idx else 0)
-
-    if toast:
-        add(h-2, 0, toast[:w-1], curses.A_BOLD)
-    stdscr.refresh()
-
-def tui_menu(stdscr):
-    curses.curs_set(0)
-    stdscr.nodelay(False)
-    stdscr.keypad(True)
-
-    usb_sub = MenuState("USB", [
-        MenuItem("Current", "status", status_fn=usb_status_text),
-        MenuItem("Select Mode", "selector", data={"choices": USB_CHOICES}),
-        MenuItem("Apply: HID + NET", "action", data={"fn": lambda: usb_set("hid_net_only")}),
-        MenuItem("Apply: HID + NET + MSD", "action", data={"fn": lambda: usb_set("hid_storage_net")}),
-        MenuItem("Apply: Storage Only", "action", data={"fn": lambda: usb_set("storage_only")}),
-    ])
-
-    def payload_set_cur(name): return lambda: payload_set(name)
-    payload_choices = get_payload_choices()
-    payload_sub = MenuState("Payloads", [
-        MenuItem("Active (pointer)", "status", status_fn=payload_status_text),
-        MenuItem("Select Active", "selector", data={"choices": payload_choices}),
-        *[MenuItem(f"Set active: {lab}", "action", data={"fn": payload_set_cur(val)}) for lab, val in payload_choices[:6]],
-        MenuItem("--- transient runner ---", "status", status_fn=lambda: " "),
-        MenuItem("Status (all)", "action", data={"fn": lambda: payload_status_all()}),
-        *[MenuItem(f"Start: {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_start(v))[1])}) for lab, val in payload_choices[:5]],
-        *[MenuItem(f"Stop:  {lab}", "action", data={"fn": (lambda v=val: (need_root(), payload_stop(v))[1])}) for lab, val in payload_choices[:5]],
-    ])
-
-    web_sub = MenuState("Web UI", [
-        MenuItem("Status", "status", status_fn=web_status_text),
-        MenuItem("Bind (host:port)", "selector", data={"choices": _web_bind_choices()}),
-        MenuItem("Start", "action", data={"fn": web_start}),
-        MenuItem("Stop", "action", data={"fn": web_stop}),
-        MenuItem("Restart", "action", data={"fn": web_restart}),
-        MenuItem("Enable", "action", data={"fn": web_enable}),
-        MenuItem("Disable", "action", data={"fn": web_disable}),
-        MenuItem("Show override", "action", data={"fn": lambda: web_config_show(None)}),
-        MenuItem("Show URL", "action", data={"fn": web_url}),
-    ])
-
-    def mk_svc_actions(title, unit):
-        return MenuState(title, [
-            MenuItem("Status",  "status", status_fn=lambda u=unit: svc_status_text(u)),
-            MenuItem("Start",   "action", data={"fn": lambda u=unit: (need_root(), systemctl('start', u).returncode)[1]}),
-            MenuItem("Stop",    "action", data={"fn": lambda u=unit: (need_root(), systemctl('stop', u).returncode)[1]}),
-            MenuItem("Restart", "action", data={"fn": lambda u=unit: (need_root(), systemctl('restart', u).returncode)[1]}),
-            MenuItem("Enable",  "action", data={"fn": lambda u=unit: (need_root(), systemctl('enable', u).returncode)[1]}),
-            MenuItem("Disable", "action", data={"fn": lambda u=unit: (need_root(), systemctl('disable', u).returncode)[1]}),
-            MenuItem("Install (copy+enable)",    "action", data={"fn": lambda u=unit: svc_install(u)}),
-            MenuItem("Uninstall (disable+rm)",   "action", data={"fn": lambda u=unit: svc_uninstall(u)}),
-        ])
-    svc_items = [MenuItem(nice, "submenu", data={"submenu": mk_svc_actions(nice, unit)}) for nice, unit in SERVICE_UNITS]
-    services_sub = MenuState("Services", svc_items if svc_items else [MenuItem("(no units)", "status")])
-
-    root = MenuState("P4wnP1-O2", [
-        MenuItem("USB", "submenu", data={"submenu": usb_sub}),
-        MenuItem("Payloads", "submenu", data={"submenu": payload_sub}),
-        MenuItem("Web UI", "submenu", data={"submenu": web_sub}),
-        MenuItem("Services", "submenu", data={"submenu": services_sub}),
-        MenuItem("IP", "status", status_fn=ip_text),
-        MenuItem("Quit", "action", data={"fn": lambda: "QUIT"}),
-    ])
-
-    stack = [root]
-    toast = ""
-
-    while True:
-        draw_menu(stdscr, stack[-1], toast)
-        toast = ""
-        k = stdscr.getch()
-
-        if k in (curses.KEY_UP, ord('k')):
-            st = stack[-1]; st.idx = (st.idx - 1) % len(st.items)
-        elif k in (curses.KEY_DOWN, ord('j')):
-            st = stack[-1]; st.idx = (st.idx + 1) % len(st.items)
-        elif k in (curses.KEY_LEFT, curses.KEY_BACKSPACE, 127, ord('h')):
-            st = stack[-1]
-            cur = st.current()
-            if cur and cur.kind == "selector":
-                pos = st.sel_idx.get(id(cur), 0)
-                choices = cur.data.get("choices", [])
-                if choices:
-                    st.sel_idx[id(cur)] = (pos - 1) % len(choices)
-            elif len(stack) > 1:
-                stack.pop()
-        elif k in (curses.KEY_RIGHT, curses.KEY_ENTER, 10, 13, ord('l')):
-            st = stack[-1]
-            cur = st.current()
-            if not cur:
-                continue
-            if cur.kind == "submenu":
-                stack.append(cur.data["submenu"])
-            elif cur.kind == "status":
-                try: toast = last_line(cur.status_fn())
-                except Exception: toast = ""
-            elif cur.kind == "selector":
-                pos = st.sel_idx.get(id(cur), 0)
-                choices = cur.data.get("choices", [])
-                if not choices: continue
-                label, value = choices[pos]
-                if cur.label.startswith("Select Mode"):
-                    rc = usb_set(value)
-                elif cur.label.startswith("Bind (host:port)"):
-                    host, port = value
-                    rc = web_config_set(host, port)
-                elif cur.label.startswith("Select Active"):
-                    rc = payload_set(value)
-                else:
-                    rc = 0
-                toast = "✓ OK" if rc == 0 else f"✗ ERR ({rc})"
-            elif cur.kind == "action":
-                fn = cur.data.get("fn")
-                if not fn: continue
-                r = fn()
-                if r == "QUIT": return
-                toast = "✓ OK" if (isinstance(r, int) and r == 0) or r is None else "✓"
-        elif k in (ord('q'),):
-            return
-
 # ======= CLI parsing =======
 def main() -> int:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
@@ -1409,6 +1618,9 @@ def main() -> int:
             print(USB_HELP.rstrip()); return 0
         sub = sys.argv[2].lower()
         if sub == "status": return usb_status()
+        if sub == "prep":     return usb_prep()
+        if sub == "replug":   return usb_replug()
+        if sub == "fixperms":  return usb_fixperms()
         if sub == "set":
             if len(sys.argv) < 4:
                 print(USB_HELP.rstrip()); return 1
@@ -1431,6 +1643,19 @@ def main() -> int:
                 caps["acm"] if acm is None else acm
             )
         print(USB_HELP.rstrip()); return 1
+
+    if cmd == "wifi":
+        if len(sys.argv) == 2:
+            print(WIFI_HELP.rstrip()); return 0
+        sub = sys.argv[2].lower()
+        if sub == "status":   return wifi_status()
+        if sub == "ap":
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "start":
+                return wifi_ap_start()
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "stop":
+                return wifi_ap_stop()
+            print(WIFI_HELP.rstrip()); return 1
+        print(WIFI_HELP.rstrip()); return 1
 
     # payload
     if cmd == "payload":
@@ -1531,15 +1756,6 @@ def main() -> int:
         if len(sys.argv) >= 4 and sys.argv[2] == "render":
             return template_render(sys.argv[3])
         print("usage: p4wnctl template render <file>"); return 1
-
-    # menu
-    if cmd == "menu":
-        try:
-            curses.wrapper(tui_menu)
-            return 0
-        except Exception:
-            print("Menu needs an interactive terminal. Try: p4wnctl usb status / web status / service ...")
-            return 1
 
     print(MAIN_HELP.rstrip())
     return 1
