@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
+import re
 import sys
 import json
 import time
@@ -10,6 +11,7 @@ import subprocess
 from pathlib import Path
 from textwrap import dedent
 from string import Template
+from ipaddress import ip_interface, IPv4Interface, ip_network
 
 # ======= Paths / constants =======
 P4WN_HOME = Path(os.environ.get("P4WN_HOME", "/opt/p4wnp1"))
@@ -17,6 +19,7 @@ HOOKS = P4WN_HOME / "hooks"
 CONFIG = P4WN_HOME / "config"
 USB_GADGET = Path("/sys/kernel/config/usb_gadget/p4wnp1")
 ACTIVE_PAYLOAD_FILE = CONFIG / "active_payload"
+RUN_DIR      = Path("/run/p4wnp1")
 
 WEBUI_UNIT = "p4wnp1-webui.service"
 WEBUI_OVERRIDE_DIR = Path(f"/etc/systemd/system/{WEBUI_UNIT}.d")
@@ -59,20 +62,30 @@ USB_CHOICES = [
     ("HID + NET(all) + Storage", "hid_storage_net"),
 ]
 
-# Defaults for gadget network and MSg
-AP_SSID   = os.environ.get("P4WN_AP_SSID", "P4WNP1")
-AP_PSK    = os.environ.get("P4WN_AP_PSK", "p4wnp1o2")  # 8+ chars
-AP_CIDR   = os.environ.get("P4WN_AP_CIDR", "172.24.0.1/24")
-AP_NET    = "172.24.0.0/24"
-AP_CHAN   = int(os.environ.get("P4WN_AP_CHAN", "6"))
-AP_COUNTRY= os.environ.get("P4WN_AP_COUNTRY", "US")    # set to your locale if needed
+# Defaults for Wifi AP
+# Defaults for Wifi AP (persisted in CONFIG/ap.json; no env required)
+AP_SETTINGS_FILE = CONFIG / "ap.json"
+AP_SSID   = "P4WNP1"
+AP_PSK    = "p4wnp1o2"          # 8+ chars
+AP_CIDR   = "10.36.1.1/24"
+AP_CHAN   = 6
+AP_COUNTRY= "ES"
+AP_HIDDEN = False
+
+AP_HOSTAPD_PID  = RUN_DIR / "hostapd.wlan0.pid"
+AP_DNSMASQ_PID  = RUN_DIR / "dnsmasq.ap.pid"
+AP_DNSMASQ_CONF = RUN_DIR / "dnsmasq.ap.conf"
+AP_HOSTAPD_CONF = Path("/etc/hostapd/hostapd-p4wnp1.conf")
+AP_HOSTAPD_LOG = RUN_DIR / "hostapd.ap.log"
+AP_DNSMASQ_LOG = RUN_DIR / "dnsmasq.ap.log"
+
 USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
 USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
 USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")
 MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
 MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "128"))
 
-# ======= Small helpers =======
+# ------------ Small helpers ------------
 def sh(cmd: str, check=True, input: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, check=check, input=input)
 
@@ -222,7 +235,7 @@ def gadget_ifaces() -> list[str]:
                 res.append(iface)
     return sorted(set(res))
 
-# ======= Service management (generic) =======
+# ------------ Service management (generic) ------------
 def svc_paths(unit: str) -> tuple[Path, Path]:
     src1 = P4WN_HOME / "systemd" / unit
     src2 = P4WN_HOME / unit
@@ -261,7 +274,7 @@ def svc_status_text(unit: str) -> str:
     enabled = systemctl("is-enabled", unit).stdout.strip() or "unknown"
     return f"{unit}: {active} ({enabled})"
 
-# ======= USB (configfs builder, no legacy g_* modules) =======
+# ------------ USB (configfs builder, no legacy g_* modules) ------------
 def usb_unbind_all():
     base = Path("/sys/kernel/config/usb_gadget")
     for g in base.iterdir():
@@ -682,7 +695,6 @@ def _func_rndis():
                 _write(f_osd / "use", "1")
             except Exception:
                 pass
-    # -----------------------------------------------------------------------
 
     return f
 
@@ -827,11 +839,29 @@ def _ensure_usb0_ip():
         sh(f"{ip_bin} addr add {USB0_CIDR} dev usb0 2>/dev/null || true", check=False)
         sh(f"{ip_bin} link set usb0 up 2>/dev/null || true", check=False)
 
-# ===== USB0 DHCP + NAT helpers =====
+# ------------ USB0 DHCP + NAT helpers ------------
 
-RUN_DIR      = Path("/run/p4wnp1")
 DNSMASQ_PID  = RUN_DIR / "dnsmasq.usb0.pid"
 DNSMASQ_CONF = RUN_DIR / "dnsmasq.usb0.conf"
+WPA_CONF = RUN_DIR / "wpa_supplicant-wlan0.conf"
+WPA_PID  = RUN_DIR / "wpa_supplicant.wlan0.pid"
+DHCLIENT_PID = RUN_DIR / "dhclient.wlan0.pid"
+
+def _wpa_conf_text(ssid: str, psk: str, hidden: bool=False) -> str:
+    # scan_ssid=1 helps find hidden networks
+    scan = "1" if hidden else "0"
+    return f"""\
+    ctrl_interface=/run/wpa_supplicant
+    update_config=1
+    country={AP_COUNTRY}
+
+    network={{
+        ssid="{ssid}"
+        psk="{psk}"
+        key_mgmt=WPA-PSK
+        scan_ssid={scan}
+    }}
+    """
 
 def _dnsmasq_conf_text() -> str:
     return "\n".join([
@@ -935,6 +965,7 @@ def net_share_stop() -> int:
 def usb_apply_mode(mode: str) -> int:
     need_root()
     usb_preflight()
+    usb_teardown()
     _gadget_common_init()
     cfg = USB_GADGET / "configs/c.1"
     usb_teardown()
@@ -1209,13 +1240,105 @@ def usb_serial_status() -> int:
     en = systemctl("is-enabled", "serial-getty@ttyGS0.service").stdout.strip() or "unknown"
     print(f"serial-getty@ttyGS0: {st} ({en})"); return 0
 
-# --- Wi-Fi AP (hostapd + dnsmasq), pure Python --------------------------------
+# ------------------------------- WiFi AP --------------------------------
+
+def _parse_bool_word(v: str) -> bool:
+    return str(v).strip().lower() in ("1","true","yes","on","y")
+
+def ap_settings_load() -> dict:
+    """
+    Load AP settings from CONFIG/ap.json, override module globals so
+    hostapd/dnsmasq get fresh values without restarting the process.
+    """
+    global AP_SSID, AP_PSK, AP_CIDR, AP_CHAN, AP_COUNTRY, AP_HIDDEN
+    cur = {
+        "ssid": AP_SSID,
+        "psk": AP_PSK,
+        "cidr": AP_CIDR,
+        "chan": AP_CHAN,
+        "country": AP_COUNTRY,
+        "hidden": bool(AP_HIDDEN),
+    }
+    try:
+        if AP_SETTINGS_FILE.exists():
+            data = json.loads(AP_SETTINGS_FILE.read_text())
+            if isinstance(data, dict):
+                cur.update(data)
+    except Exception:
+        pass
+
+    # type/validation guards (cheap)
+    cur["ssid"]    = str(cur["ssid"])
+    cur["psk"]     = str(cur["psk"])
+    cur["cidr"]    = str(cur["cidr"])
+    cur["chan"]    = int(cur["chan"])
+    cur["country"] = str(cur["country"])
+    cur["hidden"]  = bool(cur["hidden"])
+
+    # push into globals for functions which reference AP_* directly
+    AP_SSID, AP_PSK, AP_CIDR, AP_CHAN, AP_COUNTRY, AP_HIDDEN = (
+        cur["ssid"], cur["psk"], cur["cidr"], cur["chan"], cur["country"], cur["hidden"]
+    )
+    return cur
+def ap_settings_save(**updates) -> dict:
+    """
+    Update and persist AP settings; returns the merged dict.
+    """
+    cur = ap_settings_load()
+    cur.update(updates or {})
+    # minimal validation here; setters do the heavy checks
+    AP_SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AP_SETTINGS_FILE.write_text(json.dumps(cur, indent=2))
+    # reflect into globals immediately
+    return ap_settings_load()
+
+def wifi_relay_start() -> int:
+    rc = usb_dhcp_start()
+    if rc != 0: return rc
+    return net_share_start("wlan0")
+
+def wifi_relay_stop() -> int:
+    usb_dhcp_stop()
+    return net_share_stop()
+
+def wifi_relay_status() -> int:
+    usb_dhcp_status()
+    rc = sh("nft list table inet p4wnp1", check=False)
+    print("NAT:", "enabled" if rc.returncode == 0 else "disabled")
+    return 0
+
+def _iw_interfaces() -> list[str]:
+    out = sh("iw dev 2>/dev/null | awk '/Interface/ {print $2}'", check=False).stdout or ""
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+def _wifi_force_ap_type() -> None:
+    """
+    Put wlan0 into AP mode reliably.
+    Must be called while wlan0 is DOWN.
+    Also delete stale P2P devices which block AP mode on brcmfmac.
+    """
+    # Nuke any P2P “side-devices” first
+    for iface in _iw_interfaces():
+        if iface.startswith("p2p-") or iface.startswith("p2p-dev"):
+            sh(f"iw dev {iface} del 2>/dev/null || true", check=False)
+
+    # Now force the type while down
+    sh("iw dev wlan0 set type __ap 2>/dev/null || iw dev wlan0 set type ap 2>/dev/null || true", check=False)
+
+def _wifi_set_regdom(country: str) -> None:
+    if country and len(country) == 2:
+        sh(f"iw reg set {country.upper()} 2>/dev/null || true", check=False)
 
 def _hostapd_conf() -> str:
-    return f"""\
+    # refresh globals from persisted config
+    ap_settings_load()
+    hide = "1" if AP_HIDDEN else "0"
+    return dedent(f"""\
+    ctrl_interface=/run/hostapd
     interface=wlan0
     driver=nl80211
     ssid={AP_SSID}
+    ignore_broadcast_ssid={hide}
     hw_mode=g
     channel={AP_CHAN}
     wmm_enabled=1
@@ -1227,87 +1350,350 @@ def _hostapd_conf() -> str:
     wpa_key_mgmt=WPA-PSK
     rsn_pairwise=CCMP
     wpa_passphrase={AP_PSK}
-    """
+    """).strip() + "\n"
 
 def _dnsmasq_conf() -> str:
-    # hand out 172.24.0.100..172.24.0.200, router 172.24.0.1
-    return f"""\
+    # refresh globals from persisted config
+    ap_settings_load()
+    # derive DHCP range from AP_CIDR
+    iface = ip_interface(AP_CIDR)
+    if not isinstance(iface, IPv4Interface):
+        # fall back to a sane default if user put IPv6
+        gw = "172.24.0.1"
+        start, end, mask = "172.24.0.100", "172.24.0.200", "255.255.255.0"
+    else:
+        net = iface.network
+        gw = str(iface.ip)
+        # heuristics: pick roughly the middle chunk of the pool
+        hosts = [str(h) for h in net.hosts()]
+        if len(hosts) >= 50:
+            start = hosts[max(10, len(hosts)//4)]
+            end   = hosts[min(len(hosts)-2, len(hosts)//4 + 100)]
+        elif len(hosts) >= 10:
+            start = hosts[2]; end = hosts[-3]
+        else:
+            start = hosts[0]; end = hosts[-1]
+        mask = str(net.netmask)
+
+    return dedent(f"""\
     interface=wlan0
     bind-interfaces
     domain-needed
     bogus-priv
-    dhcp-range=172.24.0.100,172.24.0.200,255.255.255.0,12h
-    dhcp-option=3,172.24.0.1
+    dhcp-range={start},{end},{mask},12h
+    dhcp-option=3,{gw}
     dhcp-option=6,8.8.8.8,1.1.1.1
     log-queries
     log-dhcp
-    """
+    """).strip() + "\n"
 
 def _write_ap_configs():
     need_root()
-    hp = Path("/etc/hostapd/hostapd-p4wnp1.conf")
-    dp = Path("/etc/dnsmasq.d/p4wnp1.conf")
-    hp.parent.mkdir(parents=True, exist_ok=True)
-    dp.parent.mkdir(parents=True, exist_ok=True)
-    hp.write_text(_hostapd_conf())
-    dp.write_text(_dnsmasq_conf())
-    return str(hp), str(dp)
+    AP_HOSTAPD_CONF.parent.mkdir(parents=True, exist_ok=True)
+    AP_HOSTAPD_CONF.write_text(_hostapd_conf())
+    AP_DNSMASQ_CONF.parent.mkdir(parents=True, exist_ok=True)
+    AP_DNSMASQ_CONF.write_text(_dnsmasq_conf())
+    return str(AP_HOSTAPD_CONF), str(AP_DNSMASQ_CONF)
+
+def _pid_alive(pidfile: Path) -> bool:
+    try:
+        pid = int(pidfile.read_text().strip() or "0")
+        return pid > 0 and Path(f"/proc/{pid}").exists()
+    except Exception:
+        return False
 
 def wifi_ap_start() -> int:
     need_root()
-    # sanity: tools present?
+    ap_settings_load()  # pull latest SSID/PSK/CIDR/chan/country/hidden
+
     if not which("hostapd"):
         print("[!] hostapd not installed", file=sys.stderr); return 2
     if not which("dnsmasq"):
         print("[!] dnsmasq not installed", file=sys.stderr); return 2
 
-    # stop client supplicant if it’s holding wlan0
-    sh("systemctl stop wpa_supplicant@wlan0.service 2>/dev/null || true", check=False)
+    # Stop any client stack and managers that could grab wlan0
+    wifi_client_disconnect()
+    _dhcp_release("wlan0")
 
-    # unblock and bring wlan0 up with static IP
+    # Extra belt-and-suspenders cleanup for brcmfmac
+    sh("pkill -x wpa_supplicant 2>/dev/null || true", check=False)
+    sh("pkill -f 'wpa_supplicant.*wlan0' 2>/dev/null || true", check=False)
+    # Network managers which might revive STA mode
+    systemctl("stop", "dhcpcd.service")
+    systemctl("stop", "NetworkManager.service")
+    systemctl("stop", "iwd.service")
+    systemctl("stop", "wpa_supplicant@wlan0.service")
+    systemctl("stop", "wpa_supplicant.service")
+
+    # Reg domain and type
+    _wifi_set_regdom(AP_COUNTRY)
+    # Bring iface down before changing type
     sh("rfkill unblock wifi || true", check=False)
     ip = which("ip") or "/sbin/ip"
     sh(f"{ip} link set wlan0 down || true", check=False)
+
+    # Force AP type now (must be while down)
+    _wifi_force_ap_type()
+
+    # Clean any old addressing and assign our AP IP, then up
     sh(f"{ip} addr flush dev wlan0 || true", check=False)
     sh(f"{ip} addr add {AP_CIDR} dev wlan0", check=False)
     sh(f"{ip} link set wlan0 up", check=False)
 
-    # write configs
+    # Write configs (hostapd picks up current AP_* via ap_settings_load())
     hostapd_conf, dnsmasq_conf = _write_ap_configs()
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    AP_HOSTAPD_LOG.unlink(missing_ok=True)
+    AP_DNSMASQ_LOG.unlink(missing_ok=True)
 
-    # point hostapd to our config and start services
-    # use transient systemd units so we don't ship static files
-    sh(f"systemctl stop hostapd dnsmasq 2>/dev/null || true", check=False)
+    # Kill previous AP instances (if any)
+    sh("pkill -f 'hostapd.*hostapd-p4wnp1.conf' 2>/dev/null || true", check=False)
+    sh("pkill -f dnsmasq.*dnsmasq.ap.conf 2>/dev/null || true", check=False)
 
-    # hostapd
-    sh(f"systemctl start hostapd", check=False)
-    # ensure it reads our file
-    Path("/etc/default/hostapd").write_text(f'DAEMON_CONF="{hostapd_conf}"\n')
+    # Start dnsmasq (AP instance)
+    cp_d = sh(f"dnsmasq --conf-file={AP_DNSMASQ_CONF} --pid-file={AP_DNSMASQ_PID} --log-facility={AP_DNSMASQ_LOG}", check=False)
+    d_ok = _pid_alive(AP_DNSMASQ_PID)
+    if not d_ok:
+        # Retry as DHCP-only (port 53 conflict)
+        sh("pkill -f dnsmasq.*dnsmasq.ap.conf 2>/dev/null || true", check=False)
+        cp_d = sh(f"dnsmasq --port=0 --conf-file={AP_DNSMASQ_CONF} --pid-file={AP_DNSMASQ_PID} --log-facility={AP_DNSMASQ_LOG}", check=False)
+        d_ok = _pid_alive(AP_DNSMASQ_PID)
 
-    # dnsmasq uses drop-in in /etc/dnsmasq.d/, just restart
-    sh("systemctl restart dnsmasq", check=False)
+    # Start hostapd
+    cp_h = sh(f"hostapd -B -f {AP_HOSTAPD_LOG} -P {AP_HOSTAPD_PID} {hostapd_conf}", check=False)
+    h_ok = _pid_alive(AP_HOSTAPD_PID)
 
-    # quick up-check
-    h = sh("systemctl is-active hostapd", check=False).stdout.strip()
-    d = sh("systemctl is-active dnsmasq", check=False).stdout.strip()
-    print(f"AP: hostapd={h or 'unknown'}, dnsmasq={d or 'unknown'}")
-    print(f"SSID: {AP_SSID} / PSK: {AP_PSK} / CIDR: {AP_CIDR}")
-    return 0
+    # Second retry: reload brcmfmac if still down
+    if not h_ok:
+        # Driver reload often fixes nl80211 init on Pi
+        sh("modprobe -r brcmfmac 2>/dev/null || true", check=False)
+        time.sleep(1)
+        sh("modprobe brcmfmac 2>/dev/null || true", check=False)
+
+        # Re-assert AP mode and IP
+        _wifi_set_regdom(AP_COUNTRY)
+        sh(f"{ip} link set wlan0 down || true", check=False)
+        _wifi_force_ap_type()
+        sh(f"{ip} addr flush dev wlan0 || true", check=False)
+        sh(f"{ip} addr add {AP_CIDR} dev wlan0", check=False)
+        sh(f"{ip} link set wlan0 up", check=False)
+
+        # Try hostapd again on the persisted config
+        cp_h = sh(f"hostapd -B -f {AP_HOSTAPD_LOG} -P {AP_HOSTAPD_PID} {hostapd_conf}", check=False)
+        h_ok = _pid_alive(AP_HOSTAPD_PID)
+
+    # If hostapd failed, try the “deep clean” dance and a safe channel
+    if not h_ok:
+        # delete P2P again, force type again, and try channel 1 once
+        _wifi_force_ap_type()
+        # patch channel to 1 just for this retry (don’t persist)
+        conf_txt = AP_HOSTAPD_CONF.read_text()
+        conf_txt = re.sub(r"^channel=.*$", "channel=1", conf_txt, flags=re.M)
+        AP_HOSTAPD_CONF.write_text(conf_txt)
+        sh(f"{ip} link set wlan0 down || true", check=False)
+        sh(f"{ip} link set wlan0 up", check=False)
+        cp_h = sh(f"hostapd -B -f {AP_HOSTAPD_LOG} -P {AP_HOSTAPD_PID} {hostapd_conf}", check=False)
+        h_ok = _pid_alive(AP_HOSTAPD_PID)
+
+    vis = "HIDDEN" if AP_HIDDEN else "BROADCAST"
+    print(f"AP: hostapd={'active' if h_ok else 'inactive'}, dnsmasq={'active' if d_ok else 'failed'}")
+    print(f"SSID: {AP_SSID} ({vis}) / PSK: {AP_PSK} / CIDR: {AP_CIDR}")
+
+    if not h_ok:
+        print("---- hostapd log (last 40 lines) ----")
+        try: print("\n".join(Path(AP_HOSTAPD_LOG).read_text().splitlines()[-40:]))
+        except Exception: print("(no log)")
+    if not d_ok:
+        print("---- dnsmasq AP log (last 40 lines) ----")
+        try: print("\n".join(Path(AP_DNSMASQ_LOG).read_text().splitlines()[-40:]))
+        except Exception: print("(no log)")
+
+    return 0 if (h_ok and d_ok) else 1
 
 def wifi_ap_stop() -> int:
+    ap_settings_load()
     need_root()
+    # dnsmasq (AP instance)
+    if _pid_alive(AP_DNSMASQ_PID):
+        try:
+            pid = int(AP_DNSMASQ_PID.read_text().strip() or "0")
+            os.kill(pid, 15); time.sleep(0.2)
+        except Exception: pass
+    AP_DNSMASQ_PID.unlink(missing_ok=True)
+    sh("pkill -f dnsmasq.*dnsmasq.ap.conf 2>/dev/null || true", check=False)
+
+    # hostapd (AP instance)
+    if _pid_alive(AP_HOSTAPD_PID):
+        try:
+            pid = int(AP_HOSTAPD_PID.read_text().strip() or "0")
+            os.kill(pid, 15); time.sleep(0.2)
+        except Exception: pass
+    AP_HOSTAPD_PID.unlink(missing_ok=True)
+    sh("pkill -f 'hostapd.*hostapd-p4wnp1.conf' 2>/dev/null || true", check=False)
+
+    print("AP: stopped")
+    return 0
+
+def _dhcp_acquire(iface="wlan0") -> int:
+    # Try dhclient first, then dhcpcd
+    if which("dhclient"):
+        return sh(f"dhclient -4 -pf {DHCLIENT_PID} {iface}", check=False).returncode
+    if which("dhcpcd"):
+        return sh(f"dhcpcd -4 -q {iface}", check=False).returncode
+    print("[!] No DHCP client (dhclient/dhcpcd) installed.", file=sys.stderr)
+    return 2
+
+def _dhcp_release(iface="wlan0"):
+    if which("dhclient"):
+        sh(f"dhclient -4 -r {iface}", check=False)
+    if which("dhcpcd"):
+        sh(f"dhcpcd -k {iface}", check=False)
+
+def wifi_client_join(ssid: str, psk: str, hidden: bool=False) -> int:
+    need_root()
+    # Ensure AP services are down (free wlan0)
     sh("systemctl stop hostapd 2>/dev/null || true", check=False)
     sh("systemctl stop dnsmasq 2>/dev/null || true", check=False)
-    # leave wlan0 as-is; client mode can reclaim it
-    print("AP: stopped")
+
+    ip = which("ip") or "/sbin/ip"
+    sh(f"{ip} link set wlan0 down || true", check=False)
+    sh(f"{ip} addr flush dev wlan0 || true", check=False)
+
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    WPA_CONF.write_text(_wpa_conf_text(ssid, psk, hidden))
+
+    # Start wpa_supplicant in the background (no systemd dependency)
+    sh("pkill -f 'wpa_supplicant.*wlan0' 2>/dev/null || true", check=False)
+    cmd = f"wpa_supplicant -B -i wlan0 -c {WPA_CONF} -P {WPA_PID}"
+    cp = sh(cmd, check=False)
+    if cp.returncode != 0:
+        sys.stderr.write(cp.stderr or "")
+        print("[!] wpa_supplicant failed", file=sys.stderr); return 1
+
+    # Bring iface up and get a lease
+    sh(f"{ip} link set wlan0 up", check=False)
+    if _dhcp_acquire("wlan0") != 0:
+        print("[!] DHCP failed on wlan0", file=sys.stderr); return 2
+
+    print(f"Client: joined SSID '{ssid}'" + (" (hidden)" if hidden else ""))
+    return 0
+
+def wifi_client_disconnect() -> int:
+    need_root()
+    _dhcp_release("wlan0")
+    # stop wpa_supplicant (PID if present, else pkill)
+    if WPA_PID.exists():
+        try:
+            pid = int(WPA_PID.read_text().strip() or "0")
+            if pid > 0:
+                os.kill(pid, 15); time.sleep(0.2)
+        except Exception:
+            pass
+        WPA_PID.unlink(missing_ok=True)
+    sh("pkill -f 'wpa_supplicant.*wlan0' 2>/dev/null || true", check=False)
+    print("Client: disconnected")
+    return 0
+
+def wifi_client_status() -> int:
+    ip = which("ip") or "/sbin/ip"
+    ss = sh(f"{ip} -4 addr show wlan0", check=False).stdout or ""
+    wl = sh("iw dev wlan0 link", check=False).stdout or ""
+    print("Wi-Fi client status:")
+    print(wl.strip() or "(not associated)")
+    print(ss.strip())
     return 0
 
 def wifi_status() -> int:
     ip = which("ip") or "/sbin/ip"
     ss = sh(f"{ip} -4 addr show wlan0", check=False).stdout or ""
-    h = sh("systemctl is-active hostapd", check=False).stdout.strip()
-    d = sh("systemctl is-active dnsmasq", check=False).stdout.strip()
-    print(f"Wi-Fi: wlan0\n{ss.strip()}\nServices: hostapd={h or 'unknown'}, dnsmasq={d or 'unknown'}")
+    h = "active" if _pid_alive(AP_HOSTAPD_PID) else "inactive"
+    d = "active" if _pid_alive(AP_DNSMASQ_PID) else "inactive"
+    print(f"Wi-Fi: wlan0\n{ss.strip()}\nServices: hostapd={h}, dnsmasq={d}")
+    return 0
+
+def wifi_ap_diag() -> int:
+    print("---- iw reg get ----")
+    print(sh("iw reg get", check=False).stdout or "")
+    print("---- iw dev ----")
+    print(sh("iw dev", check=False).stdout or "")
+    print("---- iw list (phy capabilities) ----")
+    print(sh("iw list | sed -n '1,120p'", check=False).stdout or "")
+    print("---- hostapd last 60 lines ----")
+    try:
+        print("\n".join(Path(AP_HOSTAPD_LOG).read_text().splitlines()[-60:]))
+    except Exception:
+        print("(no log)")
+    return 0
+
+def wifi_driver_reset() -> int:
+    # Reload Broadcom FullMAC driver (fixes "Could not connect to kernel driver")
+    sh("modprobe -r brcmfmac 2>/dev/null || true", check=False)
+    time.sleep(1)
+    sh("modprobe brcmfmac 2>/dev/null || true", check=False)
+    print("Wi-Fi driver reloaded (brcmfmac).")
+    return 0
+
+def wifi_config_show() -> int:
+    s = ap_settings_load()
+    vis = "HIDDEN" if s["hidden"] else "BROADCAST"
+    print("Wi-Fi AP config:")
+    print(f'  ssid:    {s["ssid"]}')
+    print(f'  password:{s["psk"]}')
+    print(f'  cidr:    {s["cidr"]}')
+    print(f'  channel: {s["chan"]}')
+    print(f'  country: {s["country"]}')
+    print(f'  hidden:  {vis}')
+    return 0
+
+def wifi_set_ssid(val: str) -> int:
+    val = val.strip()
+    if not (1 <= len(val) <= 32):
+        print("[!] SSID must be 1..32 characters.", file=sys.stderr); return 1
+    ap_settings_save(ssid=val)
+    print(f"AP SSID set to: {val}")
+    return 0
+
+def wifi_set_password(val: str) -> int:
+    if not (8 <= len(val) <= 63):
+        print("[!] WPA2-PSK length must be 8..63 characters.", file=sys.stderr); return 1
+    ap_settings_save(psk=val)
+    print("AP password updated.")
+    return 0
+
+def wifi_set_cidr(val: str) -> int:
+    try:
+        iface = ip_interface(val)
+        if not isinstance(iface, IPv4Interface):
+            raise ValueError("IPv4 only")
+    except Exception:
+        print("[!] CIDR must be IPv4 like 172.24.0.1/24", file=sys.stderr); return 1
+    ap_settings_save(cidr=str(iface))
+    print(f"AP CIDR set to: {iface}")
+    return 0
+
+def wifi_set_hidden(val: str) -> int:
+    ap_settings_save(hidden=_parse_bool_word(val))
+    print(f"AP hidden={'yes' if _parse_bool_word(val) else 'no'}")
+    return 0
+
+def wifi_set_channel(val: str) -> int:
+    try:
+        ch = int(val)
+    except ValueError:
+        print("[!] Channel must be an integer.", file=sys.stderr); return 1
+    # conservative: 1..13 (2.4 GHz). You can widen later per country.
+    if not (1 <= ch <= 13):
+        print("[!] Channel must be between 1 and 13.", file=sys.stderr); return 1
+    ap_settings_save(chan=ch)
+    print(f"AP channel set to: {ch}")
+    return 0
+
+def wifi_set_country(val: str) -> int:
+    v = (val or "").strip().upper()
+    if len(v) != 2 or not v.isalpha():
+        print("[!] Country must be a 2-letter code like US/ES/DE.", file=sys.stderr); return 1
+    ap_settings_save(country=v)
+    print(f"AP country set to: {v}")
     return 0
 
 def usb_set(mode: str) -> int:
@@ -1337,7 +1723,7 @@ def usb_set(mode: str) -> int:
     print(usb_status_text())
     return 0
 
-# ======= Payload discovery / manifests =======
+# ------------ Payload discovery / manifests ------------
 try:
     import yaml  # optional
 except Exception:
@@ -1584,7 +1970,7 @@ def payload_status_all() -> int:
         print(payload_status_text_by_name(name))
     return 0
 
-# ======= Legacy "active payload" helpers (kept) =======
+# ------------ Legacy "active payload" helpers (kept) ------------
 def _payload_candidates(name: str):
     return [
         P4WN_HOME / f"payloads/{name}.sh",
@@ -1675,7 +2061,7 @@ def get_payload_choices():
     names = list_payload_names()
     return [(n, n) for n in names]
 
-# ======= "Run Now" (requirements-aware) =======
+# ------------ "Run Now" (requirements-aware) ------------
 REQ_OVERRIDES = {
     # HID
     "reverse_inmemory": ["hid"],
@@ -1763,7 +2149,7 @@ def payload_run_now(name: str) -> int:
         return rc
     return payload_start(name)
 
-# ======= Web UI =======
+# ------------ Web UI ------------
 def web_status_text() -> str:
     st = systemctl("is-active", WEBUI_UNIT).stdout.strip() or "unknown"
     en = systemctl("is-enabled", WEBUI_UNIT).stdout.strip() or "disabled?"
@@ -1849,7 +2235,7 @@ def _web_bind_choices():
         ("0.0.0.0:9090", ("0.0.0.0", 9090)),
     ]
 
-# ======= IP =======
+# ------------ IP ------------
 def ip_text() -> str:
     base = Path("/sys/class/net")
     if not base.exists():
@@ -1917,7 +2303,7 @@ def ip_env(_args=None) -> int:
 def ip_json(_args=None) -> int:
     print(json.dumps(ips_by_iface(), indent=2)); return 0
 
-# ======= Template render (for __HOST__) =======
+# ------------ Template render (for __HOST__) ------------
 def template_render(path: str) -> int:
     p = Path(path)
     if not p.is_file():
@@ -1929,7 +2315,7 @@ def template_render(path: str) -> int:
     print(text.replace("__HOST__", host), end="")
     return 0
 
-# ======= Help screens =======
+# ------------ Help screens ----------
 MAIN_HELP = dedent("""\
 P4wnP1-O2 control CLI
 
@@ -1963,11 +2349,14 @@ Wi-Fi controls
 --------------
 Commands:
   wifi status
-  wifi ap start
-  wifi ap stop
-
-Environment overrides:
-  P4WN_AP_SSID, P4WN_AP_PSK, P4WN_AP_CIDR, P4WN_AP_CHAN, P4WN_AP_COUNTRY
+  wifi ap start | stop
+  wifi client join "<ssid>" "<psk>" [--hidden]
+  wifi client disconnect | status
+  wifi relay start | stop | status
+  wifi set ssid "<str>" | password "<str>" | cidr "<ip/xx>" | hidden <yes|no> | channel <n> | country <CC>
+  wifi config show
+  wifi diag                 # dumps iw/hostapd hints
+  wifi driver-reset         # reloads brcmfmac (fixes hostapd 'kernel driver' errors)
 """)
 
 PAYLOAD_HELP = dedent("""\
@@ -2014,7 +2403,7 @@ Commands:
   net status             # show NAT/DHCP status
 """)
 
-# ======= CLI parsing =======
+# ---------- CLI parsing ------------
 def main() -> int:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
         print(MAIN_HELP.rstrip()); return 0
@@ -2094,11 +2483,64 @@ def main() -> int:
             print(WIFI_HELP.rstrip()); return 0
         sub = sys.argv[2].lower()
         if sub == "status":   return wifi_status()
+        if sub == "diag":
+            return wifi_ap_diag()
+        if sub == "driver-reset":
+            return wifi_driver_reset()
+
         if sub == "ap":
             if len(sys.argv) == 4 and sys.argv[3].lower() == "start":
+                # Safety: refuse if current SSH session is on wlan0 (to avoid cutting ourselves off)
+                ssh_if = current_ssh_iface()
+                if ssh_if == "wlan0" and os.environ.get("P4WN_FORCE_WIFI","0").lower() not in ("1","true","yes","on"):
+                    print("[!] Refusing to start Wi-Fi AP while current SSH session is on wlan0.", file=sys.stderr)
+                    print("    Reconnect over Ethernet/USB gadget or set P4WN_FORCE_WIFI=1 to override.", file=sys.stderr)
+                    return 2
                 return wifi_ap_start()
             if len(sys.argv) == 4 and sys.argv[3].lower() == "stop":
                 return wifi_ap_stop()
+            print(WIFI_HELP.rstrip()); return 1
+        if sub == "set":
+            if len(sys.argv) < 5:
+                print('usage:\n  wifi set ssid "<str>"\n  wifi set password "<str>"\n  wifi set cidr "<ip/mask>"\n  wifi set hidden <yes|no>\n  wifi set channel <n>')
+                return 1
+            field = sys.argv[3].lower()
+            value = sys.argv[4]
+            if   field == "ssid":     return wifi_set_ssid(value)
+            elif field == "password": return wifi_set_password(value)
+            elif field == "cidr":     return wifi_set_cidr(value)
+            elif field == "hidden":   return wifi_set_hidden(value)
+            elif field == "channel":  return wifi_set_channel(value)
+            elif field == "country":  return wifi_set_country(value)
+            else:
+                print("[!] Unknown wifi setting. Use: ssid|password|cidr|hidden|channel", file=sys.stderr)
+                return 1
+
+        if sub == "config":
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "show":
+                return wifi_config_show()
+            print("usage: wifi config show"); return 1
+
+        if sub == "client":
+            if len(sys.argv) >= 4 and sys.argv[3].lower() == "join":
+                if len(sys.argv) < 6:
+                    print('usage: wifi client join "<ssid>" "<psk>" [--hidden]'); return 1
+                ssid = sys.argv[4]; psk = sys.argv[5]
+                hidden = any(a.lower() == "--hidden" for a in sys.argv[6:])
+                return wifi_client_join(ssid, psk, hidden)
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "disconnect":
+                return wifi_client_disconnect()
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "status":
+                return wifi_client_status()
+            print(WIFI_HELP.rstrip()); return 1
+
+        if sub == "relay":
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "start":
+                return wifi_relay_start()
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "stop":
+                return wifi_relay_stop()
+            if len(sys.argv) == 4 and sys.argv[3].lower() == "status":
+                return wifi_relay_status()
             print(WIFI_HELP.rstrip()); return 1
         print(WIFI_HELP.rstrip()); return 1
 

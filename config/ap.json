@@ -1,0 +1,8 @@
+{
+  "ssid": "P4WNP1",
+  "psk": "p4wnp1o2",
+  "cidr": "10.36.0.1/24",
+  "chan": 6,
+  "country": "ES",
+  "hidden": false
+}

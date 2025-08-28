@@ -15,11 +15,7 @@ ExecStartPre=/sbin/modprobe libcomposite
 ExecStartPre=/usr/bin/env python3 /opt/p4wnp1/p4wnctl.py usb auto
 ExecStartPre=/usr/bin/env python3 /opt/p4wnp1/p4wnctl.py net share wlan0
 # Long-running processes (keep the service alive)
-ExecStart=/usr/bin/env bash -lc '
-  /usr/bin/env python3 /opt/p4wnp1/webui/app.py & 
-  echo "[P4wnP1] Ready"; 
-  wait -n
-'
+ExecStart=/bin/bash -c "/usr/bin/env python3 /opt/p4wnp1/webui/app.py & echo '[P4wnP1] Ready'; wait -n"
 Restart=on-failure
 RestartSec=2
 
