@@ -25,7 +25,7 @@ def main():
     # Restart Apache (vhost uses /var/www/html)
     sh("systemctl restart apache2")
     # Start AP payload again
-    rc = sh("/opt/p4wnp1/p4wnctl.py payload run-now wifi_ap_captive_apache").returncode
+    rc = sh("/opt/p4wnp1/p4wnctl.py payload run wifi_ap_captive_apache").returncode
     print("[+] AP reset issued")
     return rc
 

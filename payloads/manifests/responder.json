@@ -1,9 +1,14 @@
 {
-  "name": "responder",
+  "name": "responder_attack",
   "group": "network",
-  "summary": "Run Responder on interface (default wlan0)",
-  "requirements": [],
+  "summary": "Run Responder on the chosen interface (default auto-detected)",
+  "requirements": ["net"],
   "harden": false,
-  "script": "payloads/network/run_responder.py",
-  "env": { "RESP_IFACE": "wlan0" }
+  "env": {},
+  "script": "payloads/network/responder_attack.py",
+  "usage": [
+    "p4wnctl.py payload run responder_attack",
+    "p4wnctl.py payload logs responder_attack",
+    "p4wnctl.py payload stop responder_attack"
+  ]
 }

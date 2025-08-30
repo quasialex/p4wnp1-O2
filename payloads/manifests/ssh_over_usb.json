@@ -6,6 +6,6 @@
   "harden": false,
   "script": "payloads/network/ssh_over_usb.py",
   "usage": [
-    "p4wnctl.py payload run-now ssh_over_usb"
+    "p4wnctl.py payload run ssh_over_usb"
   ]
 }

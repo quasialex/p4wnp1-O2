@@ -7,6 +7,6 @@
   "script": "payloads/network/ppp_over_acm.py",
   "usage": [
     "p4wnctl.py usb set hid_net_acm",
-    "p4wnctl.py payload run-now ppp_over_acm"
+    "p4wnctl.py payload run ppp_over_acm"
   ]
 }
