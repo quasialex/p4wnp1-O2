@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
 import re
@@ -37,6 +37,20 @@ PAYLOAD_MANIFEST_DIRS = [P4WN_HOME / "payloads" / "manifests"]
 
 TRANSIENT_UNIT_PREFIX = "p4w-payload-"
 
+# Payloads web server (static files for HID/NET payloads)
+PAYLOADS_ROOT = P4WN_HOME / "payloads" / "www"
+PAYLOADS_WEB_UNIT = "p4wnp1-payloads.service"
+PAYLOADS_WEB_OVERRIDE_DIR  = Path("/etc/systemd/system") / f"{PAYLOADS_WEB_UNIT}.d"
+PAYLOADS_WEB_OVERRIDE_FILE = PAYLOADS_WEB_OVERRIDE_DIR / "override.conf"
+# TLS bits for payloads HTTPS
+PAYLOADS_TLS_DIR = CONFIG / "tls"
+PAYLOADS_CERT = PAYLOADS_TLS_DIR / "payloads.crt"
+PAYLOADS_KEY  = PAYLOADS_TLS_DIR / "payloads.key"
+
+PAYLOADS_HTTPS_UNIT = "p4wnp1-payloads-https.service"
+PAYLOADS_HTTPS_OVERRIDE_DIR  = Path("/etc/systemd/system") / f"{PAYLOADS_HTTPS_UNIT}.d"
+PAYLOADS_HTTPS_OVERRIDE_FILE = PAYLOADS_HTTPS_OVERRIDE_DIR / "override.conf"
+
 # Persisted USB identity
 USB_ID_FILE = CONFIG / "usb.json"
 LAST_MODE_FILE = CONFIG / "usb.last_mode"
@@ -51,6 +65,7 @@ USB_CHOICES = [
     ("HID only", "hid"),
     ("Storage only", "storage"),
     ("Serial only", "serial"),
+    ("HID + Storage", "hid_storage"),
     ("HID + Serial", "hid_acm"),
     ("HID + RNDIS (Windows)", "hid_rndis"),
     ("HID + NCM (Win/macOS/Linux)", "hid_ncm"),
@@ -1047,6 +1062,9 @@ def usb_apply_mode(mode: str) -> int:
     elif mode == "hid_acm":
         _link(_func_hid(), cfg)
         _link(_func_acm(), cfg)
+    elif mode == "hid_storage":
+        _link(_func_hid(), cfg)
+        _link(_func_msd(), cfg)
     elif mode == "hid_rndis":
         _link(_func_hid(), cfg)
         _link(_func_rndis(), cfg)
@@ -1113,12 +1131,12 @@ def usb_apply_mode(mode: str) -> int:
         _bind_first_udc()
     except Exception as e:
         print(f"Bind failed: {e}", file=sys.stderr)
-    # If we intended to have MSD but its link got lost somehow, restore it
+        # If we intended to have MSD but its link got lost somehow, restore it
         _ensure_msd_link_present()        
         return 6
 
     _ensure_usb0_ip()
-        # Persist last applied mode
+    # Persist last applied mode
     try:
         LAST_MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
         LAST_MODE_FILE.write_text(mode)
@@ -1245,6 +1263,7 @@ def usb_status_text() -> str:
     if    hid and not (rndis or ncm or ecm or msd or acm):          mode = "hid"
     elif  msd and not (hid or rndis or ncm or ecm or acm):          mode = "storage"
     elif  acm and not (hid or rndis or ncm or ecm or msd):          mode = "serial"
+    elif  hid and msd and not (rndis or ncm or ecm or acm):         mode = "hid_storage"
     elif  hid and acm and not (rndis or ncm or ecm or msd):         mode = "hid_acm"
     elif  hid and  rndis and not (ncm or ecm or msd or acm):        mode = "hid_rndis"
     elif  hid and  ncm   and not (rndis or ecm or msd or acm):      mode = "hid_ncm"
@@ -1954,7 +1973,7 @@ def _transient_unit_cleanup(unit: str):
     sh("systemctl reset-failed", check=False)
 
 def payload_start(name: str, extra_args: list[str] | None = None) -> int:
-    unit = f"p4w-payload-{name}.service"
+    unit = transient_unit_name(name)
     _transient_unit_cleanup(unit)
     need_root()
     mans = load_manifests()
@@ -1965,7 +1984,7 @@ def payload_start(name: str, extra_args: list[str] | None = None) -> int:
     script = m.get("script")
     base_args = (m.get("args", []) or [])
     args = base_args + (extra_args or [])
-    env = m.get("env", {}) or {}
+    env  = _payload_env_for(m)
     wdir = m.get("working_dir")
     harden = bool(m.get("harden", True))
     pre = m.get("preflight", []) or []
@@ -1993,7 +2012,6 @@ def payload_start(name: str, extra_args: list[str] | None = None) -> int:
     if rc != 0:
         return rc
 
-    unit = transient_unit_name(name)
     props = [
         "--property=Restart=on-failure",
         "--property=RestartSec=2",
@@ -2029,10 +2047,18 @@ def payload_start(name: str, extra_args: list[str] | None = None) -> int:
     sys.stdout.write(cp.stdout); sys.stderr.write(cp.stderr)
     return cp.returncode
 
-def payload_stop(name: str) -> int:
+def payload_stop(name: str | None = None) -> int:
     need_root()
-    unit = transient_unit_name(name)
-    return systemctl("stop", unit).returncode
+    units = [transient_unit_name(name)] if name else list_payload_units()
+    if not units:
+        print("(no running payload units)"); return 0
+    stopped = []
+    for u in units:
+        if systemctl("is-active", u).stdout.strip() != "inactive":
+            systemctl("stop", u); systemctl("reset-failed", u); stopped.append(u)
+    if stopped:
+        print("Stopped:", ", ".join(stopped))
+    return 0
 
 def payload_logs(name: str) -> int:
     unit = transient_unit_name(name)
@@ -2160,20 +2186,49 @@ def _payload_requirements_ok(m: dict) -> tuple[bool, str]:
     missing = []
     for r in reqs:
         if r == "hid":
-            if "hid" not in usb_current_functions():
-                missing.append("hid")
+            if "hid" not in usb_current_functions(): missing.append("hid")
+        elif r in ("msd", "storage"):
+            if "msd" not in usb_current_functions() or not _msd_linked(): missing.append("msd")
         elif r in ("net", "usbnet"):
-            if not iface_has_addr("usb0"):
-                missing.append("usb0 up")
+            if not iface_has_addr("usb0"): missing.append("usb0 up")
         elif r in ("serial", "acm"):
-            if "acm" not in usb_current_functions():
-                missing.append("acm")
-        # add more as needed
+            if "acm" not in usb_current_functions(): missing.append("acm")
+        elif r in ("payload_web", "payload-http"):
+            if systemctl("is-active", PAYLOADS_WEB_UNIT).stdout.strip() != "active":
+                missing.append("payload_web")
+        elif r in ("payload_web_https", "payload-https"):
+            if systemctl("is-active", PAYLOADS_HTTPS_UNIT).stdout.strip() != "active":
+                missing.append("payload_web_https")
     return (len(missing) == 0, ", ".join(missing))
 
 def _payload_env_for(m: dict) -> dict:
     env = os.environ.copy()
     env["P4WN_HOME"] = str(P4WN_HOME)
+
+    # LHOST/IFACE defaults
+    lhost = primary_ip()
+    if lhost: env.setdefault("P4WN_LHOST", lhost)
+    iface = primary_iface()
+    if iface: env.setdefault("P4WN_NET_IFACE", iface)
+
+    # HTTP base
+    h, p, r = _payloadweb_cfg()
+    adv_http = primary_ip() or h
+    env.setdefault("P4WN_PAYLOAD_HOST", adv_http)
+    env.setdefault("P4WN_PAYLOAD_PORT", str(p))
+    env.setdefault("P4WN_PAYLOAD_URL", f"http://{adv_http}:{p}/")
+    env.setdefault("P4WN_PAYLOAD_ROOT", r)
+
+    # HTTPS base (if service active)
+    tls_active = systemctl("is-active", PAYLOADS_HTTPS_UNIT).stdout.strip() == "active"
+    th, tp, *_ = _payloadweb_https_cfg()
+    adv_https = primary_ip() or th
+    env.setdefault("P4WN_PAYLOAD_URL_TLS", f"https://{adv_https}:{tp}/")
+    env.setdefault("P4WN_PAYLOAD_SCHEME", "https" if tls_active else "http")
+
+    env.setdefault("P4WN_MSD_IMAGE", str(MSD_IMAGE))
+    env.setdefault("P4WN_MSD_SIZE_MB", str(MSD_SIZE_MB))
+
     # allow manifest env block to override
     for k, v in (m.get("env") or {}).items():
         env[str(k)] = str(v)
@@ -2184,55 +2239,16 @@ def payload_run(name: str) -> int:
     m = _manifest_for(name)
     if not m:
         print(f"[!] Payload not found: {name}", file=sys.stderr); return 4
-
-    script = m.get("script")
-    if not script:
-        print(f"[!] Manifest for '{name}' has no 'script' field.", file=sys.stderr); return 5
-
     ok, why = _payload_requirements_ok(m)
     if not ok:
         print(f"[!] Requirements not met: {why}", file=sys.stderr); return 6
+    return payload_start(name)
 
-    sp = Path(P4WN_HOME, script).resolve()
-    if not sp.exists():
-        print(f"[!] Script not found: {sp}", file=sys.stderr); return 7
-
-    unit = TRANSIENT_UNIT_PREFIX + name
-    env = _payload_env_for(m)
-
-    # run under systemd-run so it's supervised
-    cmd = [
-        "systemd-run", "--unit", unit, "--collect",
-        *(f"--setenv={k}={v}" for k, v in env.items()),
-        "/usr/bin/env", "python3", str(sp)
-    ]
-    rc = subprocess.run(cmd).returncode
-    if rc != 0:
-        print("[!] Failed to start payload (systemd-run).", file=sys.stderr)
-        return rc
-    print(f"Started payload: {name} (unit={unit})")
-    return 0
-
-def payload_stop(name: str | None = None) -> int:
-    units = [TRANSIENT_UNIT_PREFIX + name] if name else list_payload_units()
-    if not units:
-        print("(no running payload units)"); return 0
-    for u in units:
-        sh(f"systemctl stop '{u}'", check=False)
-        sh(f"systemctl reset-failed '{u}'", check=False)
-    print("Stopped:", ", ".join(units))
-    return 0
 
 def payload_status(name: str | None = None) -> int:
-    units = []
-    if name:
-        units = [TRANSIENT_UNIT_PREFIX + name]
-    else:
-        units = list_payload_units()
-
+    units = [transient_unit_name(name)] if name else list_payload_units()
     if not units:
         print("(no running payload units)"); return 0
-
     for u in units:
         sh(f"systemctl status --no-pager '{u}'", check=False)
     return 0
@@ -2286,24 +2302,40 @@ def payload_requirements_for(name: str) -> list[str]:
     return []
 
 def ensure_for_requirements(reqs: list[str]) -> int:
+    """
+    Bring up the exact gadget functions (HID/NET/MSD/Serial) and auxiliary services
+    required by a manifest or by an inferred payload group.
+
+    Special requirement keys (strings, case-insensitive):
+      - "hid", "net"/"usbnet", "msd"/"storage", "serial"/"acm"
+      - "payload_web" / "payload-http"  -> start HTTP payload file server (:80)
+      - "payload_web_https" / "payload-https" -> start HTTPS payload file server (:443)
+      - "tmux" -> warn if tmux missing (no-op otherwise)
+    """
+    reqs = [str(r).lower() for r in (reqs or [])]
+
     want_hid = "hid" in reqs
-    want_net = "net" in reqs
-    want_msd = "msd" in reqs
-    want_acm = "serial" in reqs
+    want_net = ("net" in reqs) or ("usbnet" in reqs)
+    want_msd = ("msd" in reqs) or ("storage" in reqs)
+    want_acm = ("serial" in reqs) or ("acm" in reqs)
 
-    # If nothing USB-related requested, skip touching the gadget
-    if not (want_hid or want_net or want_msd or want_acm):
-        # best-effort tmux warning only
-        if "tmux" in reqs and not which("tmux"):
-            print("[!] tmux not found; install tmux for best results.", file=sys.stderr)
-        return 0
+    # Only touch the gadget when any USB capability is requested.
+    if want_hid or want_net or want_msd or want_acm:
+        rc = usb_compose_apply(want_hid, want_net, want_msd, want_acm)
+        if rc != 0:
+            return rc
 
-    rc = usb_compose_apply(want_hid, want_net, want_msd, want_acm)
+    # Payload web servers
+    if ("payload_web" in reqs) or ("payload-http" in reqs):
+        payloadweb_start()
+
+    if ("payload_web_https" in reqs) or ("payload-https" in reqs):
+        payloadweb_https_start()
 
     if "tmux" in reqs and not which("tmux"):
         print("[!] tmux not found; install tmux for best results.", file=sys.stderr)
 
-    return rc
+    return 0
 
 def payload_run_now(name: str) -> int:
     # Prevent shooting ourselves in the foot: if a payload will flip wlan0 into AP mode
@@ -2415,6 +2447,269 @@ def _web_bind_choices():
         ("0.0.0.0:9090", ("0.0.0.0", 9090)),
     ]
 
+# ------------ Web Payloads ------------
+def _payloadweb_unit_write():
+    """
+    Install the systemd unit if missing. Uses python http.server for simplicity/reliability.
+    Root binds to :80; override host/port/root via Environment in override.conf.
+    """
+    unit_path = Path("/etc/systemd/system") / PAYLOADS_WEB_UNIT
+    if unit_path.exists(): return
+    need_root()
+    repo = P4WN_HOME / "systemd" / PAYLOADS_WEB_UNIT
+    if repo.exists():
+        unit_path.write_bytes(repo.read_bytes())
+        os.chmod(unit_path, 0o644)
+        systemctl("daemon-reload")
+        return
+    content = dedent(f"""\
+        [Unit]
+        Description=P4wnP1 Payloads Web Server (static files)
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        # Defaults (overridable via {PAYLOADS_WEB_OVERRIDE_FILE})
+        Environment="PAYLOADS_HOST=0.0.0.0" "PAYLOADS_PORT=80" "PAYLOADS_ROOT={PAYLOADS_ROOT}"
+        WorkingDirectory=/opt/p4wnp1
+        ExecStart=/usr/bin/python3 -u -m http.server $PAYLOADS_PORT --bind $PAYLOADS_HOST --directory $PAYLOADS_ROOT
+        Restart=on-failure
+        # We bind privileged port 80; run as root to avoid setcap complexity.
+        User=root
+
+        [Install]
+        WantedBy=multi-user.target
+    """)
+    unit_path.write_text(content)
+    systemctl("daemon-reload")
+
+def _payloadweb_override_write(host: str, port: int, root: Path):
+    need_root()
+    PAYLOADS_WEB_OVERRIDE_DIR.mkdir(parents=True, exist_ok=True)
+    content = dedent(f"""\
+        [Service]
+        Environment="PAYLOADS_HOST={host}" "PAYLOADS_PORT={port}" "PAYLOADS_ROOT={root}"
+    """)
+    PAYLOADS_WEB_OVERRIDE_FILE.write_text(content)
+    systemctl("daemon-reload")
+    systemctl("restart", PAYLOADS_WEB_UNIT)
+
+def _payloadweb_cfg() -> tuple[str, int, str]:
+    host = "0.0.0.0"; port = 80; root = str(PAYLOADS_ROOT)
+    if PAYLOADS_WEB_OVERRIDE_FILE.exists():
+        text = PAYLOADS_WEB_OVERRIDE_FILE.read_text()
+        for line in text.splitlines():
+            if "PAYLOADS_HOST=" in line: host = line.split("PAYLOADS_HOST=")[-1].strip().strip('"')
+            if "PAYLOADS_PORT=" in line:
+                try: port = int(line.split("PAYLOADS_PORT=")[-1].split('"')[0].strip())
+                except Exception: pass
+            if "PAYLOADS_ROOT=" in line: root = line.split("PAYLOADS_ROOT=")[-1].strip().strip('"')
+    return (host, port, root)
+
+def payloadweb_env(_args=None) -> int:
+    host, port, root = _payloadweb_cfg()
+    adv = primary_ip() or host
+    url = f"http://{adv}:{port}/"
+    print(f"export P4WN_PAYLOAD_HOST={adv}")
+    print(f"export P4WN_PAYLOAD_PORT={port}")
+    print(f"export P4WN_PAYLOAD_URL={url}")
+    print(f"export P4WN_PAYLOAD_ROOT={root}")
+    return 0
+
+def payloadweb_status_text() -> str:
+    st = systemctl("is-active", PAYLOADS_WEB_UNIT).stdout.strip()
+    en = systemctl("is-enabled", PAYLOADS_WEB_UNIT).stdout.strip()
+    host, port, root = _payloadweb_cfg()
+    adv = primary_ip() or host
+    try:
+        nfiles = sum(1 for p in Path(root).rglob("*") if p.is_file())
+    except Exception:
+        nfiles = 0
+    return f"PayloadWeb: {st} ({en})  bind={host}:{port}  url=http://{adv}:{port}/  root={root} files={nfiles}"
+
+def payloadweb_status(_args=None) -> int:
+    print(payloadweb_status_text())
+    print(payloadweb_https_status_text())
+    return 0
+
+def payloadweb_start():   _payloadweb_unit_write(); need_root(); return systemctl("start",   PAYLOADS_WEB_UNIT).returncode
+def payloadweb_stop():    need_root();              return systemctl("stop",    PAYLOADS_WEB_UNIT).returncode
+def payloadweb_restart(): need_root();              return systemctl("restart", PAYLOADS_WEB_UNIT).returncode
+def payloadweb_enable():  _payloadweb_unit_write(); need_root(); return systemctl("enable",  PAYLOADS_WEB_UNIT).returncode
+def payloadweb_disable(): need_root();              return systemctl("disable", PAYLOADS_WEB_UNIT).returncode
+
+def payloadweb_config_show(_args=None) -> int:
+    if PAYLOADS_WEB_OVERRIDE_FILE.exists():
+        print(PAYLOADS_WEB_OVERRIDE_FILE.read_text().rstrip())
+    else:
+        print("(no override set; service defaults in effect)")
+    return 0
+
+def payloadweb_config_set(host: str, port: int, root: str | None) -> int:
+    if host == "auto":
+        auto = primary_ip()
+        if not auto:
+            print("Could not determine primary IP for 'auto'", file=sys.stderr); return 1
+        host = auto
+    if port <= 0 or port > 65535:
+        print("invalid --port", file=sys.stderr); return 1
+    root_path = Path(root) if root else PAYLOADS_ROOT
+    if not root_path.exists():
+        print(f"--root does not exist: {root_path}", file=sys.stderr); return 1
+    _payloadweb_unit_write()
+    _payloadweb_override_write(host, port, root_path)
+    return 0
+
+def payloadweb_url() -> int:
+    host, port, _ = _payloadweb_cfg()
+    adv = primary_ip() or host
+    print(f"http://{adv}:{port}/");
+    return 0
+
+def payloadweb_https_url() -> int:
+    host, port, *_ = _payloadweb_https_cfg()
+    adv = primary_ip() or host
+    print(f"https://{adv}:{port}/");
+    return 0
+
+def _payloadweb_https_script_path() -> Path:
+    return P4WN_HOME / "bin" / "payloads_https.py"
+
+def _payloadweb_https_script_write():
+    path = _payloadweb_https_script_path()
+    if path.exists(): return
+    need_root()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    code = dedent(r"""
+    #!/usr/bin/env python3
+    import os, ssl, sys
+    from pathlib import Path
+    from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+    host = os.environ.get("PAYLOADS_HOST", "0.0.0.0")
+    port = int(os.environ.get("PAYLOADS_PORT", "443"))
+    root = os.environ.get("PAYLOADS_ROOT", "/opt/p4wnp1/payloads/www")
+    cert = os.environ.get("PAYLOADS_CERT")
+    key  = os.environ.get("PAYLOADS_KEY")
+    if not (cert and key and Path(cert).exists() and Path(key).exists()):
+        print("[!] TLS cert/key missing", file=sys.stderr); sys.exit(2)
+    class H(SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=root, **kw)
+    httpd = ThreadingHTTPServer((host, port), H)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=cert, keyfile=key)
+    httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+    print(f"Serving HTTPS payloads on https://{host}:{port}/ -> {root}", flush=True)
+    httpd.serve_forever()
+    """).lstrip()
+    path.write_text(code)
+    os.chmod(path, 0o755)
+
+def _payloadweb_tls_ensure(cn="p4wnp1", days=3650):
+    need_root()
+    PAYLOADS_TLS_DIR.mkdir(parents=True, exist_ok=True)
+    if not (PAYLOADS_CERT.exists() and PAYLOADS_KEY.exists()):
+        sh(f'openssl req -x509 -nodes -newkey rsa:2048 -keyout "{PAYLOADS_KEY}" -out "{PAYLOADS_CERT}" -subj "/CN={cn}" -days {days}', check=False)
+
+def _payloadweb_https_unit_write():
+    unit_path = Path("/etc/systemd/system") / PAYLOADS_HTTPS_UNIT
+    if unit_path.exists():
+        return
+    need_root()
+    _payloadweb_https_script_write()
+    _payloadweb_tls_ensure()
+    content = dedent(f"""\
+        [Unit]
+        Description=P4wnP1 Payloads Web Server (HTTPS)
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        # Defaults (overridable via {PAYLOADS_HTTPS_OVERRIDE_FILE})
+        Environment="PAYLOADS_HOST=0.0.0.0" "PAYLOADS_PORT=443" "PAYLOADS_ROOT={PAYLOADS_ROOT}" "PAYLOADS_CERT={PAYLOADS_CERT}" "PAYLOADS_KEY={PAYLOADS_KEY}"
+        WorkingDirectory=/opt/p4wnp1
+        ExecStart=/usr/bin/python3 -u { _payloadweb_https_script_path() }
+        Restart=on-failure
+        User=root
+
+        [Install]
+        WantedBy=multi-user.target
+    """)
+    unit_path.write_text(content)
+    systemctl("daemon-reload")
+
+def _payloadweb_https_override_write(host: str, port: int, root: Path, cert: Path, key: Path):
+    need_root()
+    PAYLOADS_HTTPS_OVERRIDE_DIR.mkdir(parents=True, exist_ok=True)
+    content = dedent(f"""\
+        [Service]
+        Environment="PAYLOADS_HOST={host}" "PAYLOADS_PORT={port}" "PAYLOADS_ROOT={root}" "PAYLOADS_CERT={cert}" "PAYLOADS_KEY={key}"
+    """)
+    PAYLOADS_HTTPS_OVERRIDE_FILE.write_text(content)
+    systemctl("daemon-reload")
+    systemctl("restart", PAYLOADS_HTTPS_UNIT)
+
+def _payloadweb_https_cfg() -> tuple[str, int, str, str, str]:
+    host = "0.0.0.0"; port = 443; root = str(PAYLOADS_ROOT)
+    cert = str(PAYLOADS_CERT); key = str(PAYLOADS_KEY)
+    if PAYLOADS_HTTPS_OVERRIDE_FILE.exists():
+        text = PAYLOADS_HTTPS_OVERRIDE_FILE.read_text()
+        for line in text.splitlines():
+            if "PAYLOADS_HOST=" in line: host = line.split("PAYLOADS_HOST=")[-1].strip().strip('"')
+            if "PAYLOADS_PORT=" in line:
+                try: port = int(line.split("PAYLOADS_PORT=")[-1].split('"')[0].strip())
+                except Exception: pass
+            if "PAYLOADS_ROOT=" in line: root = line.split("PAYLOADS_ROOT=")[-1].strip().strip('"')
+            if "PAYLOADS_CERT=" in line: cert = line.split("PAYLOADS_CERT=")[-1].strip().strip('"')
+            if "PAYLOADS_KEY="  in line: key  = line.split("PAYLOADS_KEY=")[-1].strip().strip('"')
+    return (host, port, root, cert, key)
+
+def payloadweb_https_status_text() -> str:
+    st = systemctl("is-active", PAYLOADS_HTTPS_UNIT).stdout.strip()
+    en = systemctl("is-enabled", PAYLOADS_HTTPS_UNIT).stdout.strip()
+    host, port, root, cert, key = _payloadweb_https_cfg()
+    adv = primary_ip() or host
+    return f"PayloadWebTLS: {st} ({en})  bind={host}:{port}  url=https://{adv}:{port}/  root={root}"
+
+def payloadweb_https_status(_args=None) -> int: print(payloadweb_https_status_text()); return 0
+
+def payloadweb_https_start():   _payloadweb_https_unit_write(); need_root(); return systemctl("start",   PAYLOADS_HTTPS_UNIT).returncode
+def payloadweb_https_stop():    need_root();                    return systemctl("stop",    PAYLOADS_HTTPS_UNIT).returncode
+def payloadweb_https_restart(): need_root();                    return systemctl("restart", PAYLOADS_HTTPS_UNIT).returncode
+def payloadweb_https_enable():  _payloadweb_https_unit_write(); need_root(); return systemctl("enable",  PAYLOADS_HTTPS_UNIT).returncode
+def payloadweb_https_disable(): need_root();                    return systemctl("disable", PAYLOADS_HTTPS_UNIT).returncode
+
+def payloadweb_https_config_show(_args=None) -> int:
+    if PAYLOADS_HTTPS_OVERRIDE_FILE.exists():
+        print(PAYLOADS_HTTPS_OVERRIDE_FILE.read_text().rstrip())
+    else:
+        print("(no override set; service defaults in effect)")
+    return 0
+
+def payloadweb_https_config_set(host: str, port: int, root: str | None, cert: str | None, key: str | None) -> int:
+    if host == "auto":
+        auto = primary_ip()
+        if not auto:
+            print("Could not determine primary IP for 'auto'", file=sys.stderr); return 1
+        host = auto
+    if port <= 0 or port > 65535:
+        print("invalid --port", file=sys.stderr); return 1
+    root_path = Path(root) if root else PAYLOADS_ROOT
+    if not root_path.exists():
+        print(f"--root does not exist: {root_path}", file=sys.stderr); return 1
+    cert_path = Path(cert) if cert else PAYLOADS_CERT
+    key_path  = Path(key)  if key  else PAYLOADS_KEY
+    if not (cert_path.exists() and key_path.exists()):
+        print("[!] TLS cert/key not found; run: p4wnctl payload web cert gen", file=sys.stderr); return 1
+    _payloadweb_https_unit_write()
+    _payloadweb_https_override_write(host, port, root_path, cert_path, key_path)
+    return 0
+
+def payloadweb_cert_gen(cn="p4wnp1", days=3650) -> int:
+    _payloadweb_tls_ensure(cn=cn, days=days)
+    print(f"Generated (or exists):\n  cert: {PAYLOADS_CERT}\n  key:  {PAYLOADS_KEY}")
+    return 0
+
 # ------------ IP ------------
 def ip_text() -> str:
     base = Path("/sys/class/net")
@@ -2492,7 +2787,11 @@ def template_render(path: str) -> int:
     if not host:
         print("Could not resolve primary IP", file=sys.stderr); return 1
     text = p.read_text(encoding="utf-8", errors="ignore")
-    print(text.replace("__HOST__", host), end="")
+    # also inject the payload URL
+    ph, pp, _ = _payloadweb_cfg()
+    adv = host or ph
+    text = text.replace("__HOST__", adv).replace("__PAYLOAD_URL__", f"http://{adv}:{pp}/")
+    print(text, end="")
     return 0
 
 # ------------ Help screens ----------
@@ -2544,6 +2843,7 @@ PAYLOAD_HELP = dedent("""\
 Payload controls
 ----------------
 Commands:
+  payload web                # payload webserver submenu
   payload list
   payload set <name>         # legacy active payload pointer (sh/py)
   payload status             # shows active payload pointer
@@ -2554,6 +2854,33 @@ Commands:
   payload stop <name>
   payload logs <name>
   payload describe <name>
+""")
+
+PAYLOADWEB_HELP = dedent(f"""\
+usage: p4wnctl payload web [status|start|stop|restart|enable|disable|url|env|config show|config set --host <ip|auto> --port <int> --root <path>]
+       p4wnctl payload web https [status|start|stop|restart|enable|disable|url|config show|config set --host <ip|auto> --port <int> [--root <path>] [--cert <pem>] [--key <pem>]]
+       p4wnctl payload web cert gen [--cn <name>] [--days <n>]
+
+Serves static payload files (HTTP on :80, optional HTTPS on :443) from: {PAYLOADS_ROOT}
+
+First run (HTTPS):
+
+  p4wnctl payload web cert gen              # create TLS cert/key
+  p4wnctl payload web https enable          # install + enable the TLS unit
+  p4wnctl payload web https status          # expect: active (enabled)
+  p4wnctl payload web https url             # shows advertised URL (primary IP or override)
+
+Notes:
+  - 'inactive (not-found)' on status means the unit isn’t installed yet (run 'https enable').
+  - 'url' commands show the advertised IP (not just the bind address).
+  - Use 'env' to export P4WN_PAYLOAD_URL, P4WN_PAYLOAD_URL_TLS, and P4WN_PAYLOAD_SCHEME.
+
+Examples:
+  p4wnctl payload web start
+  p4wnctl payload web env
+  p4wnctl payload web https enable
+  p4wnctl payload web cert gen --cn p4wnp1 --days 3650
+  p4wnctl payload web https config set --host auto --port 443
 """)
 
 WEB_HELP = dedent(f"""\
@@ -2610,8 +2937,7 @@ def main() -> int:
         if sub == "inf":
             if len(sys.argv) == 4 and sys.argv[3] == "write":
                 return usb_inf_write()
-                print("usage: p4wnctl usb inf write"); return 1
-
+                # ↓ remove this dead line:
         if sub == "id":
             if len(sys.argv) >= 4 and sys.argv[3] == "show":
                 return usb_id_show()
@@ -2660,7 +2986,7 @@ def main() -> int:
                 v = v.lower()
                 return v in ("1", "true", "yes", "on", "y")
 
-            caps = usb_caps_now()  # current active links (hid/net/msd/acm) :contentReference[oaicite:0]{index=0}
+            caps = usb_caps_now()  # current active links (hid/net/msd/acm) 
 
             hid = pbool("hid")
             net = pbool("net")
@@ -2752,6 +3078,87 @@ def main() -> int:
         if len(sys.argv) == 2:
             print(PAYLOAD_HELP.rstrip()); return 0
         sub = sys.argv[2].lower()
+
+        # payload web (nested submenu)
+        if sub == "web":
+            # no extra args → help
+            if len(sys.argv) == 3:
+                print(PAYLOADWEB_HELP.rstrip()); return 0
+            action = sys.argv[3].lower()
+            if action == "status":  return payloadweb_status()
+            if action == "start":   return payloadweb_start()
+            if action == "stop":    return payloadweb_stop()
+            if action == "restart": return payloadweb_restart()
+            if action == "enable":  return payloadweb_enable()
+            if action == "disable": return payloadweb_disable()
+            if action == "url":     return payloadweb_url()
+            if action == "env":     return payloadweb_env()
+            if action == "https":
+                if len(sys.argv) == 4:
+                    print("usage: p4wnctl payload web https {status|start|stop|restart|enable|disable|url|config show|config set --host <ip|auto> --port <int> [--root <path>] [--cert <pem>] [--key <pem>]}"); return 0
+                a2 = sys.argv[4].lower()
+                if a2 == "status":  return payloadweb_https_status()
+                if a2 == "start":   return payloadweb_https_start()
+                if a2 == "stop":    return payloadweb_https_stop()
+                if a2 == "restart": return payloadweb_https_restart()
+                if a2 == "enable":  return payloadweb_https_enable()
+                if a2 == "disable": return payloadweb_https_disable()
+                if a2 == "url":     return payloadweb_https_url()
+                if a2 == "config":
+                    if len(sys.argv) == 5 or sys.argv[5].lower() == "show":
+                        return payloadweb_https_config_show()
+                    if sys.argv[5].lower() == "set":
+                        host = None; port = None; root = None; cert = None; key = None
+                        args = sys.argv[6:]; i = 0
+                        while i < len(args):
+                            if args[i] == "--host" and i+1 < len(args): host = args[i+1]; i += 2; continue
+                            if args[i] == "--port" and i+1 < len(args):
+                                try: port = int(args[i+1]);
+                                except ValueError: print("port must be an integer"); return 1
+                                i += 2; continue
+                            if args[i] == "--root" and i+1 < len(args): root = args[i+1]; i += 2; continue
+                            if args[i] == "--cert" and i+1 < len(args): cert = args[i+1]; i += 2; continue
+                            if args[i] == "--key"  and i+1 < len(args): key  = args[i+1]; i += 2; continue
+                            i += 1
+                        if not host or port is None:
+                            print("usage: p4wnctl payload web https config set --host <ip|auto> --port <int> [--root <path>] [--cert <pem>] [--key <pem>]"); return 1
+                        return payloadweb_https_config_set(host, port, root, cert, key)
+                print("usage: p4wnctl payload web https {status|start|stop|restart|enable|disable|url|config ...}"); return 1
+
+            if action == "config":
+                if len(sys.argv) == 4:
+                    print(PAYLOADWEB_HELP.rstrip()); return 0
+                cfg_action = sys.argv[4].lower()
+                if cfg_action == "show": return payloadweb_config_show()
+                if cfg_action == "set":
+                    host = None; port = None; root = None
+                    args = sys.argv[5:]; i = 0
+                    while i < len(args):
+                        if args[i] == "--host" and i+1 < len(args):
+                            host = args[i+1]; i += 2; continue
+                        if args[i] == "--port" and i+1 < len(args):
+                            try: port = int(args[i+1])
+                            except ValueError: print("port must be an integer"); return 1
+                            i += 2; continue
+                        if args[i] == "--root" and i+1 < len(args):
+                            root = args[i+1]; i += 2; continue
+                        i += 1
+                    if not host or port is None:
+                        print(PAYLOADWEB_HELP.rstrip()); return 1
+                    return payloadweb_config_set(host, port, root)
+
+            if action == "cert":
+                # self-signed certificate helper
+                cn = "p4wnp1"; days = 3650
+                args = sys.argv[4:]
+                for i,a in enumerate(args):
+                    if a == "--cn"   and i+1 < len(args): cn   = args[i+1]
+                    if a == "--days" and i+1 < len(args):
+                        try: days = int(args[i+1])
+                        except: pass
+                return payloadweb_cert_gen(cn=cn, days=days)
+            # unknown action
+            print(PAYLOADWEB_HELP.rstrip()); return 1
 
         if sub == "list":   return payload_list()
         if sub == "set":

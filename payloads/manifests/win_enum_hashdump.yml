@@ -1,0 +1,8 @@
+id: win_enum_hashdump
+name: Windows Hash Dump (SAM + SYSTEM)
+description: Saves registry hives (SAM, SYSTEM, SECURITY) to MSD for offline secretsdump.
+platform: windows
+type: hid
+exec: payloads/hid/win_enum_hashdump.py
+requirements:
+  msd: true

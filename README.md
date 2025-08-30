@@ -291,6 +291,54 @@ sudo systemctl daemon-reload
 > To remove files entirely, delete `/opt/p4wnp1` after stopping services.
 
 ---
+# Manifest legend
+
+**Field reference (JSON or YAML)**
+
+* `name` (string): Logical name. If omitted, file stem is used.
+* `summary` (string): One-liner shown by `payload list`.
+* `group` (string): `hid` | `network` | `shell` | `listeners` (affects default requirements if you don’t provide them).
+* `script` (string path): Absolute or relative to `/opt/p4wnp1`. If omitted, `p4wnctl` will try to find `<name>.py/.sh` under `payloads/*`.&#x20;
+* `cmd` (string): Shell command to run **instead of** `script`. Mutually exclusive with `bin`.
+* `bin` (string): Executable path to run with `args` (no shell). Mutually exclusive with `cmd`.
+* `args` (list\[string]): Extra args when using `bin` or appended to `script` when launched.&#x20;
+* `env` (map): Extra environment variables (merged on top of defaults). Defaults include:
+
+  * `P4WN_LHOST` (primary IP), `P4WN_NET_IFACE` (primary iface),
+  * `P4WN_PAYLOAD_URL` (`http://<ip>:<port>/`), `P4WN_PAYLOAD_URL_TLS` (`https://<ip>:<port>/`), `P4WN_PAYLOAD_SCHEME` (`https` if TLS service active else `http`), `P4WN_PAYLOAD_ROOT` (payload docroot),
+  * **(new)** `P4WN_MSD_IMAGE`, `P4WN_MSD_SIZE_MB`.&#x20;
+* `requirements` (list\[string]): What to bring up beforehand. Recognized keys:
+
+  * `hid`, `net`/`usbnet`, `msd`/`storage`, `serial`/`acm` (USB functions)
+  * `payload_web`/`payload-http` (start HTTP :80), `payload_web_https`/`payload-https` (start HTTPS :443)
+  * `tmux` (warn if missing; no hard dependency)&#x20;
+* `preflight` (list\[string]): Shell commands run before starting (apt, pip, mkdirs…). Non-interactive; 20-min timeout. Failure aborts launch.&#x20;
+* `working_dir` (string): `chdir` prior to exec.&#x20;
+* `harden` (bool, default `true`): Adds `NoNewPrivileges`, `PrivateTmp`, `ProtectSystem=full`, `ProtectHome=yes`.&#x20;
+* Optional doc fields (shown by `payload describe`): `usage` (list\[string]), `risks` (list\[string]), `estimated_runtime` (string).&#x20;
+
+**Example**
+
+```yaml
+name: win_autorun
+summary: HID-launch PowerShell to fetch & run over HTTPS
+group: hid
+script: payloads/hid/win_autorun.py
+requirements: [hid, payload_web_https]
+env:
+  PAYLOAD_FILE: autorun.ps1
+preflight:
+  - 'test -f /usr/bin/openssl || apt-get update && apt-get install -y openssl'
+```
+
+Payload code can then do:
+
+```python
+base = os.getenv("P4WN_PAYLOAD_URL_TLS") if os.getenv("P4WN_PAYLOAD_SCHEME")=="https" else os.getenv("P4WN_PAYLOAD_URL")
+url  = base + os.getenv("PAYLOAD_FILE", "autorun.ps1")
+```
+
+---
 
 ## Credits
 

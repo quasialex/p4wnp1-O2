@@ -1,0 +1,15 @@
+{
+  "name": "pivot_helper",
+  "group": "network",
+  "summary": "Enable DHCP on usb0 and NAT traffic via the given uplink (default: wlan0).",
+  "usage": [
+    "p4wnctl payload run pivot_helper",
+    "env UPLINK=eth0 p4wnctl payload run pivot_helper"
+  ],
+  "requirements": ["net"],
+  "env": {
+    "UPLINK": "wlan0"
+  },
+  "script": "payloads/network/pivot_helper.py",
+  "harden": true
+}

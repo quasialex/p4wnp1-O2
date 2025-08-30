@@ -1,0 +1,12 @@
+{
+  "name": "Windows Autorun HID",
+  "description": "Downloads and executes PowerShell payload via HID",
+  "entry": "hid/win_autorun.py",
+  "args": [
+    {
+      "name": "P4WN_AUTORUN_PAYLOAD",
+      "default": "/payloads/autorun.ps1",
+      "description": "Relative path to hosted PowerShell payload"
+    }
+  ]
+}

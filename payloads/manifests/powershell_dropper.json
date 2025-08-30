@@ -1,0 +1,20 @@
+{
+  "name": "powershell_dropper",
+  "type": "hid",
+  "description": "Unlocks host (optional), runs PowerShell, downloads and executes remote script.",
+  "args": {
+    "username": {
+      "type": "string",
+      "description": "Optional username for unlock (Ctrl+Alt+Del)"
+    },
+    "password": {
+      "type": "string",
+      "description": "Password for session unlock"
+    },
+    "url": {
+      "type": "string",
+      "description": "URL of remote .ps1 payload",
+      "default": "http://10.13.37.1/payload.ps1"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "HID Backdoor Shell",
+  "description": "Spawns persistent PowerShell TCP shell over HID (reverse).",
+  "entry": "hid/win_hid_backdoor.py",
+  "args": [],
+  "web_required": false,
+  "mass_storage_required": false
+}

@@ -1,0 +1,7 @@
+{
+  "name": "start_tmux_shell",
+  "group": "shell",
+  "summary": "Start/attach tmux session 'p4w'.",
+  "requirements": ["net", "tmux"],
+  "cmd": "tmux new -A -s p4w"
+}

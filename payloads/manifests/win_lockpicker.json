@@ -1,0 +1,22 @@
+{
+  "name": "Windows Lockpicker",
+  "description": "Brute-force HID login and spawn reverse shell (env-based LHOST/LPORT)",
+  "entry": "hid/win_lockpicker.py",
+  "args": [
+    {
+      "name": "userlist",
+      "default": "/usr/share/wordlists/usernames.txt",
+      "description": "Username list"
+    },
+    {
+      "name": "passlist",
+      "default": "/usr/share/wordlists/rockyou.txt",
+      "description": "Password list"
+    },
+    {
+      "name": "spawn-reverse",
+      "description": "Send HID reverse shell after successful login",
+      "type": "flag"
+    }
+  ]
+}

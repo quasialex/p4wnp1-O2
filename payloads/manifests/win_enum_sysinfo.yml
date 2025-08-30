@@ -1,0 +1,8 @@
+id: win_enum_sysinfo
+name: Windows System Enumeration
+description: Enumerates hostname, OS, IP, processes, and AV info to a file on MSD.
+platform: windows
+type: hid
+exec: payloads/hid/win_enum_sysinfo.py
+requirements:
+  msd: true

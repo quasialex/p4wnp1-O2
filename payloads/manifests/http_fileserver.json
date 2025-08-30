@@ -1,0 +1,16 @@
+{
+  "name": "http_fileserver",
+  "group": "network",
+  "summary": "Serve the /opt/p4wnp1/share directory over HTTP on port 8080.",
+  "usage": [
+    "p4wnctl payload run http_fileserver",
+    "Browse http://__HOST__:8080/ from target"
+  ],
+  "requirements": ["net"],
+  "env": {
+    "SERVE_DIR": "/opt/p4wnp1/share",
+    "SERVE_PORT": "8080"
+  },
+  "script": "payloads/network/http_fileserver.py",
+  "harden": true
+}

