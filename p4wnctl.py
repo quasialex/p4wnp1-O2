@@ -37,6 +37,8 @@ PAYLOAD_MANIFEST_DIRS = [P4WN_HOME / "payloads" / "manifests"]
 
 TRANSIENT_UNIT_PREFIX = "p4w-payload-"
 
+# Persisted USB identity
+USB_ID_FILE = CONFIG / "usb.json"
 LAST_MODE_FILE = CONFIG / "usb.last_mode"
 
 # Known units for Services submenu (optional convenience)
@@ -603,28 +605,97 @@ def _bind_first_udc():
 
 def _gadget_common_init():
     USB_GADGET.mkdir(parents=True, exist_ok=True)
-    _write(USB_GADGET / "idVendor", "0x1d6b")
-    _write(USB_GADGET / "idProduct", "0x0104")
+
+    # Load persisted VID/PID + strings (or defaults)
+    ids = usb_id_load()
+    _write(USB_GADGET / "idVendor",  ids.get("vid", "0x1d6b"))
+    _write(USB_GADGET / "idProduct", ids.get("pid", "0x0104"))
+
     _write(USB_GADGET / "bcdDevice", "0x0100")
-    _write(USB_GADGET / "bcdUSB", "0x0200")
-    _write(USB_GADGET / "bDeviceClass",    "0xEF") 
+    _write(USB_GADGET / "bcdUSB",    "0x0200")
+    _write(USB_GADGET / "bDeviceClass",    "0xEF")
     _write(USB_GADGET / "bDeviceSubClass", "0x02")
     _write(USB_GADGET / "bDeviceProtocol", "0x01")
-    s = USB_GADGET / "strings/0x409"
-    _write(s / "serialnumber", "P4wnP1-O2")
-    _write(s / "manufacturer", "quasialex")
-    _write(s / "product", "P4wnP1-O2 Gadget")
+
+    s  = USB_GADGET / "strings/0x409"
+    st = ids.get("strings") or {}
+    _write(s / "serialnumber", st.get("serial",       "P4wnP1-O2"))
+    _write(s / "manufacturer", st.get("manufacturer", "quasialex"))
+    _write(s / "product",      st.get("product",      "P4wnP1-O2 Gadget"))
+
     cfg = USB_GADGET / "configs/c.1"
     _write(cfg / "MaxPower", "250")
     _write(USB_GADGET / "configs/c.1/strings/0x409/configuration", "Config 1")
+
     # MS OS descriptors (global)
     osd = USB_GADGET / "os_desc"
     try:
-        _write(osd / "b_vendor_code", "0xcd")   # any non-zero vendor-specific code
+        _write(osd / "b_vendor_code", "0xcd")  # any non-zero vendor-specific code
         _write(osd / "qw_sign", "MSFT100")
         _write(osd / "use", "1")
     except Exception:
         pass
+
+def usb_id_load() -> dict:
+    d = {
+        "vid": "0x1d6b",
+        "pid": "0x0104",
+        "strings": {
+            "serial": "P4wnP1-O2",
+            "manufacturer": "quasialex",
+            "product": "P4wnP1-O2 Gadget",
+        },
+    }
+    try:
+        if USB_ID_FILE.exists():
+            j = json.loads(USB_ID_FILE.read_text())
+            if isinstance(j, dict):
+                d.update({k: j.get(k, d[k]) for k in ("vid", "pid")})
+                sj = (j.get("strings") or {}) if isinstance(j.get("strings"), dict) else {}
+                d["strings"] = {**d["strings"], **sj}
+    except Exception:
+        pass
+    return d
+
+def usb_id_save(vid: str | None=None, pid: str | None=None, **strings):
+    cur = usb_id_load()
+    if vid: cur["vid"] = vid
+    if pid: cur["pid"] = pid
+    if strings:
+        cur["strings"] = {**(cur.get("strings") or {}), **strings}
+    USB_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+    USB_ID_FILE.write_text(json.dumps(cur, indent=2))
+
+def usb_id_show() -> int:
+    d = usb_id_load()
+    s = d.get("strings") or {}
+    print(f"VID={d['vid']} PID={d['pid']}")
+    print(f'serial="{s.get("serial","")}" manufacturer="{s.get("manufacturer","")}" product="{s.get("product","")}"')
+    return 0
+
+def usb_id_set(vid: str, pid: str) -> int:
+    if not (vid.lower().startswith("0x") and pid.lower().startswith("0x")):
+        print("[!] Use hex like 0x1d6b 0x0104", file=sys.stderr); return 1
+    usb_id_save(vid=vid, pid=pid)
+    print(f"Saved VID/PID: {vid} {pid} (replug to apply)")
+    return 0
+
+def usb_id_strings(serial: str | None=None, manufacturer: str | None=None, product: str | None=None) -> int:
+    filt = {k:v for k,v in {
+        "serial": serial, "manufacturer": manufacturer, "product": product
+    }.items() if v is not None}
+    if not filt:
+        print('usage: p4wnctl usb id strings [--serial s] [--manufacturer m] [--product p]')
+        return 1
+    usb_id_save(**filt)
+    print("Saved USB strings (replug to apply).")
+    return 0
+
+def usb_id_reset() -> int:
+    try: USB_ID_FILE.unlink()
+    except Exception: pass
+    print("USB identity reset to defaults (replug to apply).")
+    return 0
 
 def _set_vid_pid(vid: str, pid: str):
     """
@@ -968,8 +1039,6 @@ def usb_apply_mode(mode: str) -> int:
     usb_teardown()
     _gadget_common_init()
     cfg = USB_GADGET / "configs/c.1"
-    usb_teardown()
-    _gadget_common_init()
 
     if mode == "hid_net":
         _link(_func_hid(), cfg)
@@ -979,7 +1048,6 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_hid(), cfg)
         _link(_func_acm(), cfg)
     elif mode == "hid_rndis":
-        _set_vid_pid("0x1d6b", "0x0104")
         _link(_func_hid(), cfg)
         _link(_func_rndis(), cfg)
     elif mode == "hid_ecm":
@@ -1007,7 +1075,6 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_rndis(), cfg)
         _link(_func_msd(), cfg)
     elif mode == "hid_storage_rndis":
-        _set_vid_pid("0x1d6b", "0x0104")
         _link(_func_hid(), cfg)
         _link(_func_rndis(), cfg)
         _link(_func_msd(), cfg) 
@@ -1017,7 +1084,6 @@ def usb_apply_mode(mode: str) -> int:
         _link(_func_rndis(), cfg)
         _link(_func_acm(), cfg)
     elif mode == "hid_rndis_acm":
-        _set_vid_pid("0x1d6b", "0x0104")
         _link(_func_rndis(), cfg)
         _link(_func_acm(), cfg)
         _link(_func_hid(), cfg)
@@ -1043,6 +1109,7 @@ def usb_apply_mode(mode: str) -> int:
     # -------------------------------------------
 
     try:
+        _ensure_msd_link_present()
         _bind_first_udc()
     except Exception as e:
         print(f"Bind failed: {e}", file=sys.stderr)
@@ -1294,8 +1361,10 @@ def ap_settings_save(**updates) -> dict:
 
 def wifi_relay_start() -> int:
     rc = usb_dhcp_start()
-    if rc != 0: return rc
-    return net_share_start("wlan0")
+    if rc != 0:
+        return rc
+    upl = default_route_iface() or "wlan0"
+    return net_share_start(upl)
 
 def wifi_relay_stop() -> int:
     usb_dhcp_stop()
@@ -1797,6 +1866,15 @@ def transient_unit_name(name: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_") else "-" for ch in name.lower())
     return f"{TRANSIENT_UNIT_PREFIX}{safe}.service"
 
+def list_payload_units() -> list[str]:
+    out = sh("systemctl list-units --type=service --all --no-legend 'p4w-payload-*.service'", check=False).stdout or ""
+    units = []
+    for ln in out.splitlines():
+        toks = ln.split()
+        if toks:
+            units.append(toks[0])
+    return units
+
 def payload_status_text_by_name(name: str) -> str:
     unit = transient_unit_name(name)
     active = systemctl("is-active", unit).stdout.strip() or "unknown"
@@ -1875,7 +1953,7 @@ def _transient_unit_cleanup(unit: str):
     sh("systemctl daemon-reload", check=False)
     sh("systemctl reset-failed", check=False)
 
-def payload_start(name: str) -> int:
+def payload_start(name: str, extra_args: list[str] | None = None) -> int:
     unit = f"p4w-payload-{name}.service"
     _transient_unit_cleanup(unit)
     need_root()
@@ -1885,7 +1963,8 @@ def payload_start(name: str) -> int:
     cmd = m.get("cmd")
     binp = m.get("bin")
     script = m.get("script")
-    args = m.get("args", []) or []
+    base_args = (m.get("args", []) or [])
+    args = base_args + (extra_args or [])
     env = m.get("env", {}) or {}
     wdir = m.get("working_dir")
     harden = bool(m.get("harden", True))
@@ -2006,9 +2085,6 @@ def payload_status_text() -> str:
         except Exception: pass
     return f"Payload: {resolved.stem}"
 
-def payload_status(_args=None) -> int:
-    print(payload_status_text()); return 0
-
 def payload_list(group: str | None = None) -> int:
     mans = load_manifests()
     names = list_payload_names()
@@ -2055,6 +2131,110 @@ def payload_describe(name: str) -> int:
     if m.get("estimated_runtime"):
         print(f"\nEstimated runtime: {m['estimated_runtime']}")
     print(f"\nManifest: {m.get('_manifest_path','(unknown)')}")
+    return 0
+
+def _manifest_for(name: str) -> dict | None:
+    m = load_manifests().get(name)
+    if not m:
+        # try by filename: wifi_ap_captive_apache.json -> "wifi_ap_captive_apache"
+        mm = load_manifests()
+        if name in mm:
+            return mm[name]
+    return m
+
+def usb_current_functions() -> set[str]:
+    """Return active gadget functions from c.1 symlinks as: {'hid','rndis','ecm','ncm','msd','acm'}."""
+    cfg = USB_GADGET / "configs" / "c.1"
+    names = set()
+    for n in ("hid","rndis","ecm","ncm","mass_storage","acm"):
+        if (cfg / f"{n}.usb0").exists():
+            names.add("msd" if n == "mass_storage" else n)
+    return names
+
+def iface_has_addr(ifname: str) -> bool:
+    """True if interface has any IPv4 address."""
+    return bool(ips_by_iface().get(ifname))
+
+def _payload_requirements_ok(m: dict) -> tuple[bool, str]:
+    reqs = m.get("requirements", [])
+    missing = []
+    for r in reqs:
+        if r == "hid":
+            if "hid" not in usb_current_functions():
+                missing.append("hid")
+        elif r in ("net", "usbnet"):
+            if not iface_has_addr("usb0"):
+                missing.append("usb0 up")
+        elif r in ("serial", "acm"):
+            if "acm" not in usb_current_functions():
+                missing.append("acm")
+        # add more as needed
+    return (len(missing) == 0, ", ".join(missing))
+
+def _payload_env_for(m: dict) -> dict:
+    env = os.environ.copy()
+    env["P4WN_HOME"] = str(P4WN_HOME)
+    # allow manifest env block to override
+    for k, v in (m.get("env") or {}).items():
+        env[str(k)] = str(v)
+    return env
+
+def payload_run(name: str) -> int:
+    need_root()
+    m = _manifest_for(name)
+    if not m:
+        print(f"[!] Payload not found: {name}", file=sys.stderr); return 4
+
+    script = m.get("script")
+    if not script:
+        print(f"[!] Manifest for '{name}' has no 'script' field.", file=sys.stderr); return 5
+
+    ok, why = _payload_requirements_ok(m)
+    if not ok:
+        print(f"[!] Requirements not met: {why}", file=sys.stderr); return 6
+
+    sp = Path(P4WN_HOME, script).resolve()
+    if not sp.exists():
+        print(f"[!] Script not found: {sp}", file=sys.stderr); return 7
+
+    unit = TRANSIENT_UNIT_PREFIX + name
+    env = _payload_env_for(m)
+
+    # run under systemd-run so it's supervised
+    cmd = [
+        "systemd-run", "--unit", unit, "--collect",
+        *(f"--setenv={k}={v}" for k, v in env.items()),
+        "/usr/bin/env", "python3", str(sp)
+    ]
+    rc = subprocess.run(cmd).returncode
+    if rc != 0:
+        print("[!] Failed to start payload (systemd-run).", file=sys.stderr)
+        return rc
+    print(f"Started payload: {name} (unit={unit})")
+    return 0
+
+def payload_stop(name: str | None = None) -> int:
+    units = [TRANSIENT_UNIT_PREFIX + name] if name else list_payload_units()
+    if not units:
+        print("(no running payload units)"); return 0
+    for u in units:
+        sh(f"systemctl stop '{u}'", check=False)
+        sh(f"systemctl reset-failed '{u}'", check=False)
+    print("Stopped:", ", ".join(units))
+    return 0
+
+def payload_status(name: str | None = None) -> int:
+    units = []
+    if name:
+        units = [TRANSIENT_UNIT_PREFIX + name]
+    else:
+        units = list_payload_units()
+
+    if not units:
+        print("(no running payload units)"); return 0
+
+    for u in units:
+        sh(f"systemctl status --no-pager '{u}'", check=False)
     return 0
 
 def get_payload_choices():
@@ -2338,6 +2518,7 @@ Commands:
   usb replug                      # unbind/rebind UDC (or rebuild if busy)
   usb fixperms                    # chmod 0666 /dev/hidg* (quick test)
   usb inf write                   # drop an INF onto the MSD for Windows
+  usb id show|set|strings|reset   # manage VID/PID and USB strings (persisted)
   usb dhcp {start|stop|status}
   usb serial {enable|disable|status}
   usb set {hid_net|hid_rndis|hid_ecm|hid_ncm|hid_net_acm|hid_rndis_acm|hid_storage_net|hid_storage_rndis|hid_storage_ncm|hid_storage_net_acm|storage}
@@ -2369,7 +2550,7 @@ Commands:
   payload status all         # transient runner states for all discovered payloads
   payload status <name>
   payload start <name>       # runs using manifest (cmd|bin|script)
-  payload run-now <name|active>   # ensure USB/WiFi prereqs, then start
+  payload run <name|active>   # ensure USB/WiFi prereqs, then start (alias: run-now)
   payload stop <name>
   payload logs <name>
   payload describe <name>
@@ -2419,7 +2600,6 @@ def main() -> int:
         if sub == "prep":     return usb_prep()
         if sub == "replug":   return usb_replug()
         if sub == "fixperms":  return usb_fixperms()
-        if sub == "replug":   return usb_replug()
         if sub == "auto":     return usb_auto()
 
         if sub == "set":
@@ -2431,6 +2611,29 @@ def main() -> int:
             if len(sys.argv) == 4 and sys.argv[3] == "write":
                 return usb_inf_write()
                 print("usage: p4wnctl usb inf write"); return 1
+
+        if sub == "id":
+            if len(sys.argv) >= 4 and sys.argv[3] == "show":
+                return usb_id_show()
+            if len(sys.argv) >= 6 and sys.argv[3] == "set":
+                return usb_id_set(sys.argv[4], sys.argv[5])
+            if len(sys.argv) >= 4 and sys.argv[3] == "strings":
+                # parse --serial/--manufacturer/--product
+                args = sys.argv[4:]
+                def grab(flag):
+                    for i,a in enumerate(args):
+                        if a == flag and i+1 < len(args):
+                            return args[i+1]
+                    return None
+                return usb_id_strings(
+                    serial=grab("--serial"),
+                    manufacturer=grab("--manufacturer"),
+                    product=grab("--product"),
+                )
+            if len(sys.argv) >= 4 and sys.argv[3] == "reset":
+                return usb_id_reset()
+            print("usage:\n  usb id show\n  usb id set <0xVID> <0xPID>\n  usb id strings [--serial s] [--manufacturer m] [--product p]\n  usb id reset")
+            return 1
 
         if sub == "dhcp":
             if len(sys.argv) == 4 and sys.argv[3] in ("start","stop","status"):
@@ -2560,9 +2763,13 @@ def main() -> int:
             if len(sys.argv) == 4: return payload_status_named(sys.argv[3])
             print(PAYLOAD_HELP.rstrip()); return 1
         if sub == "start":
-            if len(sys.argv) < 4: print("usage: p4wnctl payload start <name>"); return 1
-            return payload_start(sys.argv[3])
-        if sub == "run-now":
+            if len(sys.argv) < 4:
+                print("usage: p4wnctl payload start <name> [-- <args...>]"); return 1
+            extra = sys.argv[4:]
+            if extra and extra[0] == "--":
+                extra = extra[1:]
+            return payload_start(sys.argv[3], extra)
+        if sub in ("run", "run-now"):
             nm = sys.argv[3] if len(sys.argv) >= 4 else "active"
             return payload_run_now(nm)
         if sub == "stop":
@@ -2574,7 +2781,6 @@ def main() -> int:
         if sub == "describe":
             if len(sys.argv) < 4: print("usage: p4wnctl payload describe <name>"); return 1
             return payload_describe(sys.argv[3])
-
         print(PAYLOAD_HELP.rstrip()); return 1
 
     # web

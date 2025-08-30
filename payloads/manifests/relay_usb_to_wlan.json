@@ -1,0 +1,10 @@
+{
+  "name": "relay_usb_to_wlan",
+  "group": "network",
+  "summary": "DHCP on usb0 and NAT to wlan0",
+  "requirements": ["net"],
+  "script": "payloads/network/relay_usb_to_wlan.py",
+  "env": {
+    "UPLINK": "wlan0"
+  }
+}
