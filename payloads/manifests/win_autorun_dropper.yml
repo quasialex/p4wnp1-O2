@@ -1,0 +1,8 @@
+id: win_autorun_dropper
+name: MSD Autorun Dropper
+description: Drops EXE/BAT to MSD and sets autorun.inf
+platform: windows
+type: network
+exec: payloads/network/msd/win_autorun_dropper.py
+requirements:
+  msd: true

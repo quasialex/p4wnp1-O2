@@ -1,0 +1,8 @@
+{
+  "name": "win_install_persistence",
+  "desc": "Install persistence via Run key and PS backdoor",
+  "type": "hid",
+  "msd": false,
+  "usb": "hid",
+  "exec": "win_install_persistence.py"
+}

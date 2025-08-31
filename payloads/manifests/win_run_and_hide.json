@@ -1,0 +1,8 @@
+{
+  "name": "win_run_and_hide",
+  "desc": "Copy and execute backdoor.exe (hidden)",
+  "type": "hid",
+  "usb": "hid_storage_net",
+  "msd": true,
+  "exec": "win_run_and_hide.py"
+}

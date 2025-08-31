@@ -1,0 +1,13 @@
+[Unit]
+Description=P4wnP1-O2 Wi-Fi AP (wlan0)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/p4wnp1/p4wnctl.py wifi ap start
+ExecStop=/opt/p4wnp1/p4wnctl.py wifi ap stop
+
+[Install]
+WantedBy=multi-user.target

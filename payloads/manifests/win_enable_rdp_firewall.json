@@ -1,0 +1,8 @@
+{
+  "name": "win_enable_rdp_firewall",
+  "desc": "Enable RDP and open firewall rules",
+  "type": "hid",
+  "msd": false,
+  "usb": "hid",
+  "exec": "win_enable_rdp_firewall.py"
+}

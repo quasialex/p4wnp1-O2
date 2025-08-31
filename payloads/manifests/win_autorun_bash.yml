@@ -1,0 +1,8 @@
+id: win_autorun_bash
+name: MSD Reverse Shell (autorun)
+description: Drops autorun.inf and bat reverse shell to MSD
+platform: windows
+type: network
+exec: payloads/network/msd/win_autorun_bash.py
+requirements:
+  msd: true

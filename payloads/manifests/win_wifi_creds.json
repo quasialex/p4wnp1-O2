@@ -1,0 +1,8 @@
+{
+  "name": "win_wifi_creds",
+  "desc": "Dump saved Wi-Fi credentials via HID",
+  "type": "hid",
+  "msd": true,
+  "usb": "hid_storage",
+  "exec": "win_wifi_creds.py"
+}

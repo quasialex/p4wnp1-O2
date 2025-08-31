@@ -1,9 +1,0 @@
-{
-  "name": "wifi_ap_captive_reset",
-  "group": "network",
-  "summary": "Hard reset wlan0 AP stack and relaunch AP payload",
-  "requirements": [],
-  "harden": false,
-  "script": "payloads/network/wifi_ap_captive_reset.py",
-  "env": { "IFACE": "wlan0", "AP_CIDR": "10.99.0.1/24" }
-}

@@ -1,0 +1,8 @@
+{
+  "name": "win_uac_bypass_installer",
+  "desc": "Run reverse shell as admin using UAC bypass",
+  "type": "hid",
+  "msd": false,
+  "usb": "hid",
+  "exec": "win_uac_bypass_installer.py"
+}

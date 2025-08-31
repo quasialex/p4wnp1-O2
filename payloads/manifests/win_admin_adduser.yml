@@ -1,0 +1,8 @@
+id: win_admin_adduser
+name: Add Local Admin User
+description: Creates new admin user (default: p4wnp1/P4wn@123)
+platform: windows
+type: hid
+exec: payloads/hid/win_admin_adduser.py
+requirements:
+  msd: false

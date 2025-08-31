@@ -1,0 +1,8 @@
+id: win_reverse_bash
+name: PowerShell Reverse Shell
+description: Classic in-memory reverse shell to LHOST:LPORT
+platform: windows
+type: hid
+exec: payloads/hid/win_reverse_bash.py
+requirements:
+  msd: false

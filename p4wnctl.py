@@ -1,4 +1,4 @@
-usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
 import re
@@ -6,6 +6,7 @@ import sys
 import json
 import time
 import curses
+import signal
 import socket
 import subprocess
 from pathlib import Path
@@ -55,6 +56,16 @@ PAYLOADS_HTTPS_OVERRIDE_FILE = PAYLOADS_HTTPS_OVERRIDE_DIR / "override.conf"
 USB_ID_FILE = CONFIG / "usb.json"
 LAST_MODE_FILE = CONFIG / "usb.last_mode"
 
+# --- Wi-Fi portal paths ---
+PORTAL_DIR = P4WN_HOME / "services" / "portal"
+PORTAL_BIN = PORTAL_DIR / "bin" / "portal_ctl.py"
+PORTAL_APACHE_VHOST = PORTAL_DIR / "conf" / "p4wnp1-portal.conf"   # informational
+
+LURE_PID   = RUN_DIR / "wifi_lure.pid"
+LURE_STATE = RUN_DIR / "wifi_lure.json"
+LURE_LIST  = Path("/opt/p4wnp1/config/lure_ssids.txt")
+LURE_CFG   = Path("/opt/p4wnp1/config/lure.json")
+
 # Known units for Services submenu (optional convenience)
 SERVICE_UNITS = [
     ("Core", "p4wnp1.service"),
@@ -79,7 +90,6 @@ USB_CHOICES = [
     ("HID + NET(all) + Storage", "hid_storage_net"),
 ]
 
-# Defaults for Wifi AP
 # Defaults for Wifi AP (persisted in CONFIG/ap.json; no env required)
 AP_SETTINGS_FILE = CONFIG / "ap.json"
 AP_SSID   = "P4WNP1"
@@ -96,11 +106,32 @@ AP_HOSTAPD_CONF = Path("/etc/hostapd/hostapd-p4wnp1.conf")
 AP_HOSTAPD_LOG = RUN_DIR / "hostapd.ap.log"
 AP_DNSMASQ_LOG = RUN_DIR / "dnsmasq.ap.log"
 
+# --- Bluetooth scan files ---
+BT_SCAN_PID  = RUN_DIR / "ble_scan.pid"
+BT_SCAN_LOG  = RUN_DIR / "ble_scan.jsonl"
+
 USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
 USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
 USB0_CIDR = os.environ.get("P4WN_USB0_CIDR", "10.13.37.1/24")
 MSD_IMAGE = Path(os.environ.get("P4WN_MSD_IMAGE", str(CONFIG / "mass_storage.img")))
 MSD_SIZE_MB = int(os.environ.get("P4WN_MSD_SIZE_MB", "128"))
+
+# ------------ PID helpers -------------
+def write_pid(path: Path, pid: int) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(int(pid)))
+    except Exception:
+        pass
+
+def read_pid(path: Path) -> int | None:
+    try:
+        if path.exists():
+            v = int((path.read_text().strip() or "0"))
+            return v if v > 0 and Path(f"/proc/{v}").exists() else None
+    except Exception:
+        return None
+    return None
 
 # ------------ Small helpers ------------
 def sh(cmd: str, check=True, input: str | None = None) -> subprocess.CompletedProcess:
@@ -1622,6 +1653,34 @@ def wifi_ap_stop() -> int:
     print("AP: stopped")
     return 0
 
+def wifi_ap_status():
+    # hostapd status
+    hs = sh("pgrep -af '^hostapd(\\s|$)'", check=False)
+    ds = sh("pgrep -af 'dnsmasq.*p4wnp1-ap.conf'", check=False)
+
+    ap = "active" if _pid_alive(AP_HOSTAPD_PID) else "inactive"
+    dh = "active" if _pid_alive(AP_DNSMASQ_PID) else "inactive"
+
+    ip = sh("ip -br addr show wlan0 | awk '{print $3}'", check=False).stdout.strip()
+    print(f"AP: hostapd={ap}, dnsmasq={dh}")
+    print(f"wlan0: {ip or 'down'}")
+
+def wifi_portal_start():
+    # assumes AP already up on wlan0
+    if not PORTAL_BIN.exists():
+        print("[!] Portal launcher not found:", PORTAL_BIN); return 1
+    return sh(f"/usr/bin/env python3 {PORTAL_BIN} start", check=False).returncode
+
+def wifi_portal_stop():
+    if not PORTAL_BIN.exists():
+        print("[!] Portal launcher not found:", PORTAL_BIN); return 1
+    return sh(f"/usr/bin/env python3 {PORTAL_BIN} stop", check=False).returncode
+
+def wifi_portal_status():
+    if not PORTAL_BIN.exists():
+        print("[!] Portal launcher not found:", PORTAL_BIN); return 3
+    return sh(f"/usr/bin/env python3 {PORTAL_BIN} status", check=False).returncode
+
 def _dhcp_acquire(iface="wlan0") -> int:
     # Try dhclient first, then dhcpcd
     if which("dhclient"):
@@ -1811,6 +1870,156 @@ def usb_set(mode: str) -> int:
     print(usb_status_text())
     return 0
 
+# ------------------------------- WiFi Lures --------------------------------
+
+def wifi_lure_start():
+    if LURE_PID.exists():
+        print("[*] Wi-Fi lure already running."); return 0
+    env = os.environ.copy()
+    cfg = _lure_cfg_read()
+    env.setdefault("P4WN_LURE_LIST",  cfg.get("list", str(LURE_LIST)))
+    env.setdefault("P4WN_LURE_STATE", str(LURE_STATE))
+    env["P4WN_LURE_DWELL"] = str(cfg.get("dwell", 20))
+
+    p = subprocess.Popen(
+        [sys.executable, "/opt/p4wnp1/tools/wifi_lure.py"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
+    )
+    write_pid(LURE_PID, p.pid)
+    print(f"Wi-Fi lure started (pid {p.pid}), cycling SSIDs from {LURE_LIST}")
+    return 0
+
+def wifi_lure_stop():
+    pid = read_pid(LURE_PID)
+    if not pid:
+        print("[*] Wi-Fi lure not running."); return 0
+    try: os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    LURE_PID.unlink(missing_ok=True)
+    print("Wi-Fi lure stopped.")
+    return 0
+
+def wifi_lure_status():
+    if not LURE_PID.exists():
+        print("Wi-Fi lure: stopped"); return 0
+    print("Wi-Fi lure: running")
+    if LURE_STATE.exists():
+        try:
+            import json; st = json.loads(LURE_STATE.read_text())
+            print(f" Active SSID: {st.get('active_ssid')}")
+        except Exception: pass
+    return 0
+
+def _lure_cfg_read():
+    import json
+    if LURE_CFG.exists():
+        try: return json.loads(LURE_CFG.read_text())
+        except Exception: pass
+    return {"dwell": 20, "list": str(LURE_LIST)}
+
+def _lure_cfg_write(cfg):
+    import json, os
+    os.makedirs(LURE_CFG.parent, exist_ok=True)
+    LURE_CFG.write_text(json.dumps(cfg, indent=2))
+
+def wifi_lure_set_dwell(sec):
+    cfg = _lure_cfg_read()
+    try:
+        sec = int(sec)
+        if sec < 5 or sec > 600:
+            print("[!] Dwell must be between 5 and 600 seconds."); return 2
+    except ValueError:
+        print("[!] Dwell must be an integer."); return 2
+    cfg["dwell"] = sec
+    _lure_cfg_write(cfg)
+    print(f"Lure dwell set to: {sec}s")
+    return 0
+
+def wifi_lure_set_list(path):
+    p = Path(path)
+    if not p.exists():
+        print(f"[!] SSID list not found: {p}"); return 2
+    cfg = _lure_cfg_read()
+    cfg["list"] = str(p)
+    _lure_cfg_write(cfg)
+    print(f"Lure SSID list set: {p}")
+    return 0
+
+# ------------------------------- WiFi Captive Portal --------------------------------
+
+def portal_start():
+    # Ensure AP is up first (but don't bounce it if already running)
+    if not _pid_alive(AP_HOSTAPD_PID):
+        wifi_ap_start()
+    # call the setup payload (idempotent)
+    cp = sh("python3 /opt/p4wnp1/services/portal/bin/portal_ctl.py start", check=False)
+    if cp.returncode == 0:
+        print("Captive portal: started.")
+    else:
+        print("[!] Captive portal start failed.")
+    return cp.returncode
+
+def portal_stop():
+    cp = sh("python3 /opt/p4wnp1/services/portal/bin/portal_ctl.py stop", check=False)
+    wifi_ap_stop()
+    if cp.returncode == 0:
+        print("Captive portal: stopped.")
+    else:
+        print("[!] Captive portal stop failed.")
+    return cp.returncode
+
+def portal_status():
+    # lightweight status: apache + hostapd + dnsmasq + our capture app
+    apache = sh("systemctl is-active apache2", check=False).stdout.strip()
+    print(f"Apache: {apache}")
+    wifi_status()
+    cap = Path("/var/log/p4wnp1/captive.log")
+    if cap.exists():
+        tail = sh(f"tail -n 10 {cap}", check=False).stdout
+        print("---- captive log (last 10) ----")
+        print(tail, end="")
+    return 0
+
+# ------------------------------- BLE Helpers --------------------------------
+
+def bt_scan_start():
+    if BT_SCAN_PID.exists():
+        print("[*] BLE scan already running.")
+        return 0
+    env = os.environ.copy()
+    env.setdefault("P4WN_BLE_LOG", str(BT_SCAN_LOG))
+    p = subprocess.Popen(
+        [sys.executable, "/opt/p4wnp1/tools/ble_scan.py"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
+    )
+    write_pid(BT_SCAN_PID, p.pid)
+    print(f"BLE scan started (pid {p.pid}), logging to {BT_SCAN_LOG}")
+    return 0
+
+def bt_scan_stop():
+    pid = read_pid(BT_SCAN_PID)
+    if not pid:
+        print("[*] BLE scan not running.")
+        return 0
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    BT_SCAN_PID.unlink(missing_ok=True)
+    print("BLE scan stopped.")
+    return 0
+
+def bt_scan_status():
+    running = BT_SCAN_PID.exists()
+    print(f"BLE scan: {'running' if running else 'stopped'}")
+    if BT_SCAN_LOG.exists():
+        try:
+            tail = subprocess.check_output(["tail","-n","10",str(BT_SCAN_LOG)], text=True)
+            print("---- last 10 beacons ----")
+            print(tail, end="")
+        except Exception:
+            pass
+    return 0
 # ------------ Payload discovery / manifests ------------
 try:
     import yaml  # optional
@@ -1997,16 +2206,6 @@ def payload_start(name: str, extra_args: list[str] | None = None) -> int:
             print(f"No manifest or payload found for '{name}'. "
                   f"Add payloads/manifests/{name}.json|.yml or {name}.py.", file=sys.stderr)
             return 1
-
-    # Dynamic env
-    lhost = primary_ip()
-    if lhost:
-        env = dict(env or {})
-        env.setdefault("P4WN_LHOST", lhost)
-    iface = primary_iface()
-    if iface:
-        env = dict(env or {})
-        env.setdefault("P4WN_NET_IFACE", iface)
 
     rc = _run_preflight(env, wdir, pre)
     if rc != 0:
@@ -2800,12 +2999,14 @@ P4wnP1-O2 control CLI
 
 Subcommands:
   usb         USB gadget controls
-  payload     Payload controls (list/set + start/stop/status/logs/describe/run-now)
+  wifi        Wi-Fi controls (AP / portal / client / relay)
+  payload     Payload controls (list/set + start/stop/status/logs/describe/run)
   web         Web UI controls (port/host, start/stop, enable/disable, url)
   service     Manage systemd units (install/uninstall/start/stop/...)
   ip          Show IPs (also: ip primary | ip env | ip json)
   template    Render a text file replacing __HOST__ with device IP
 """)
+
 
 USB_HELP = dedent("""\
 USB gadget controls
@@ -2829,14 +3030,18 @@ Wi-Fi controls
 --------------
 Commands:
   wifi status
-  wifi ap start | stop
+  wifi ap start | stop | status
+  wifi portal start | stop | status                         # Wi-Fi Captive portal
   wifi client join "<ssid>" "<psk>" [--hidden]
   wifi client disconnect | status
   wifi relay start | stop | status
+  wifi lure start | stop | status                           # SSID cycling lure
+  wifi lure set dwell <sec>                                 # dwell per SSID (default 20s)
+  wifi lure set list <path>                                 # path to SSID list (one SSID per line)
   wifi set ssid "<str>" | password "<str>" | cidr "<ip/xx>" | hidden <yes|no> | channel <n> | country <CC>
   wifi config show
-  wifi diag                 # dumps iw/hostapd hints
-  wifi driver-reset         # reloads brcmfmac (fixes hostapd 'kernel driver' errors)
+  wifi diag
+  wifi driver-reset
 """)
 
 PAYLOAD_HELP = dedent("""\
@@ -2857,9 +3062,13 @@ Commands:
 """)
 
 PAYLOADWEB_HELP = dedent(f"""\
-usage: p4wnctl payload web [status|start|stop|restart|enable|disable|url|env|config show|config set --host <ip|auto> --port <int> --root <path>]
-       p4wnctl payload web https [status|start|stop|restart|enable|disable|url|config show|config set --host <ip|auto> --port <int> [--root <path>] [--cert <pem>] [--key <pem>]]
-       p4wnctl payload web cert gen [--cn <name>] [--days <n>]
+usage: 
+
+  p4wnctl payload web [status|start|stop|restart|enable|disable|url|env|config show|config set --host <ip|auto> --port <int> --root <path>]
+
+  p4wnctl payload web https [status|start|stop|restart|enable|disable|url|config show|config set --host <ip|auto> --port <int> [--root <path>] [--cert <pem>] 
+                                                                                                                                               [--key <pem>]]
+  p4wnctl payload web cert gen [--cn <name>] [--days <n>]
 
 Serves static payload files (HTTP on :80, optional HTTPS on :443) from: {PAYLOADS_ROOT}
 
@@ -2911,7 +3120,7 @@ Commands:
   net status             # show NAT/DHCP status
 """)
 
-# ---------- CLI parsing ------------
+# ------------ CLI parsing --------------
 def main() -> int:
     if len(sys.argv) == 1 or sys.argv[1] in ("-h", "--help"):
         print(MAIN_HELP.rstrip()); return 0
@@ -2928,16 +3137,13 @@ def main() -> int:
         if sub == "replug":   return usb_replug()
         if sub == "fixperms":  return usb_fixperms()
         if sub == "auto":     return usb_auto()
-
         if sub == "set":
             if len(sys.argv) < 4:
                 print(USB_HELP.rstrip()); return 1
             return usb_set(sys.argv[3])
-        
         if sub == "inf":
             if len(sys.argv) == 4 and sys.argv[3] == "write":
                 return usb_inf_write()
-                # ↓ remove this dead line:
         if sub == "id":
             if len(sys.argv) >= 4 and sys.argv[3] == "show":
                 return usb_id_show()
@@ -3016,19 +3222,22 @@ def main() -> int:
             return wifi_ap_diag()
         if sub == "driver-reset":
             return wifi_driver_reset()
-
         if sub == "ap":
-            if len(sys.argv) == 4 and sys.argv[3].lower() == "start":
-                # Safety: refuse if current SSH session is on wlan0 (to avoid cutting ourselves off)
-                ssh_if = current_ssh_iface()
-                if ssh_if == "wlan0" and os.environ.get("P4WN_FORCE_WIFI","0").lower() not in ("1","true","yes","on"):
-                    print("[!] Refusing to start Wi-Fi AP while current SSH session is on wlan0.", file=sys.stderr)
-                    print("    Reconnect over Ethernet/USB gadget or set P4WN_FORCE_WIFI=1 to override.", file=sys.stderr)
-                    return 2
-                return wifi_ap_start()
-            if len(sys.argv) == 4 and sys.argv[3].lower() == "stop":
-                return wifi_ap_stop()
-            print(WIFI_HELP.rstrip()); return 1
+            if len(sys.argv) == 4:
+                act = sys.argv[3].lower()
+                if act == "start":
+                    # Safety: refuse if current SSH session is on wlan0 (to avoid cutting ourselves off)
+                    ssh_if = current_ssh_iface()
+                    if ssh_if == "wlan0" and os.environ.get("P4WN_FORCE_WIFI","0").lower() not in ("1","true","yes","on"):
+                        print("[!] Refusing to start Wi-Fi AP while current SSH session is on wlan0.", file=sys.stderr)
+                        print("    Reconnect over Ethernet/USB gadget or set P4WN_FORCE_WIFI=1 to override.", file=sys.stderr)
+                        return 2
+                    return wifi_ap_start()
+                if act == "stop":
+                    return wifi_ap_stop()
+                if act == "status":
+                    return wifi_ap_status()
+            print("usage: wifi ap start | stop | status"); return 1
         if sub == "set":
             if len(sys.argv) < 5:
                 print('usage:\n  wifi set ssid "<str>"\n  wifi set password "<str>"\n  wifi set cidr "<ip/mask>"\n  wifi set hidden <yes|no>\n  wifi set channel <n>')
@@ -3070,7 +3279,28 @@ def main() -> int:
                 return wifi_relay_stop()
             if len(sys.argv) == 4 and sys.argv[3].lower() == "status":
                 return wifi_relay_status()
-            print(WIFI_HELP.rstrip()); return 1
+
+        if sub == "lure":
+            act = sys.argv[3] if len(sys.argv)>3 else ""
+            if act == "start": return wifi_lure_start()
+            if act == "stop":  return wifi_lure_stop()
+            if act == "status":return wifi_lure_status()
+            if act == "set":
+                what = sys.argv[4] if len(sys.argv)>4 else ""
+                if what == "dwell" and len(sys.argv)>5:
+                    return wifi_lure_set_dwell(sys.argv[5])
+                if what == "list" and len(sys.argv)>5:
+                    return wifi_lure_set_list(sys.argv[5])
+                print("Usage: wifi lure set dwell <sec> | list <path>"); return 2
+            print("Usage: wifi lure start|stop|status|set ..."); return 2
+
+        if sub == "portal":
+            act = sys.argv[3] if len(sys.argv) > 3 else ""
+            if act == "start":  return portal_start()
+            if act == "stop":   return portal_stop()
+            if act == "status": return portal_status()
+            print("usage: wifi portal start|stop|status"); return 1
+
         print(WIFI_HELP.rstrip()); return 1
 
     # payload
@@ -3165,9 +3395,12 @@ def main() -> int:
             if len(sys.argv) < 4: print(PAYLOAD_HELP.rstrip()); return 1
             return payload_set(sys.argv[3])
         if sub == "status":
-            if len(sys.argv) == 3: return payload_status()
-            if len(sys.argv) == 4 and sys.argv[3] == "all": return payload_status_all()
-            if len(sys.argv) == 4: return payload_status_named(sys.argv[3])
+            if len(sys.argv) == 3:
+                print(payload_status_text()); return 0
+            if len(sys.argv) == 4 and sys.argv[3] == "all":
+                return payload_status_all()
+            if len(sys.argv) == 4:
+                return payload_status_named(sys.argv[3])
             print(PAYLOAD_HELP.rstrip()); return 1
         if sub == "start":
             if len(sys.argv) < 4:
@@ -3222,6 +3455,20 @@ def main() -> int:
                     print(WEB_HELP.rstrip()); return 1
                 return web_config_set(host, port)
         print(WEB_HELP.rstrip()); return 1
+
+    # ble
+    if cmd == "bt":
+        if len(sys.argv) < 3:
+            print("Bluetooth controls\n-------------------\nCommands:\n  bt scan start|stop|status")
+            return 0
+        sub = sys.argv[2]
+        if sub == "scan":
+            act = sys.argv[3] if len(sys.argv)>3 else ""
+            if act == "start": return bt_scan_start()
+            if act == "stop":  return bt_scan_stop()
+            if act == "status":return bt_scan_status()
+            print("Usage: bt scan start|stop|status"); return 2
+        print("Unknown bt command"); return 2
 
     # net
     if cmd == "net":
