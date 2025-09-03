@@ -1,0 +1,7 @@
+name: win_amsi_toggle
+group: hid
+summary: Execute your external AMSI-bypass/enabler script (served by web)
+script: payloads/hid/win_amsi_toggle.py
+env:
+  P4WN_LHOST: "10.0.0.1"
+  AMSI_SCRIPT: "/payloads/amsi_toggle.ps1"

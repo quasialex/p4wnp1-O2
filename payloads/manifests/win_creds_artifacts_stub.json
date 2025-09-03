@@ -1,0 +1,8 @@
+{
+  "name": "win_creds_artifacts_stub",
+  "group": "shell",
+  "summary": "Skeleton: credential artifacts collection flow (no-op)",
+  "requirements": [],
+  "script": "payloads/shell/win_creds_artifacts_stub.py"
+}
+

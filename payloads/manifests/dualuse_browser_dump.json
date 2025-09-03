@@ -1,0 +1,12 @@
+{
+  "name": "dualuse_browser_dump",
+  "group": "dualuse",
+  "summary": "Run a user-supplied browser-dump tool (you provide it).",
+  "requirements": ["net", "payload_web_https"],
+  "script": "/opt/p4wnp1/ext/dualuse/browser_dump.py",
+  "env": {
+    "LOOT_DIR": "/opt/p4wnp1/loot",
+    "P4WN_PAYLOAD_URL_TLS": "" 
+  },
+  "harden": true
+}

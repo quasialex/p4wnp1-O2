@@ -1,0 +1,10 @@
+{
+  "name": "win_enable_rdp_firewall_stub",
+  "group": "shell",
+  "summary": "Plan-only: enabling RDP and firewall allowances (no-ops).",
+  "requirements": [],
+  "harden": false,
+  "script": "payloads/shell/win_enable_rdp_firewall_stub.py",
+  "env": {}
+}
+

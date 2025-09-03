@@ -1,0 +1,8 @@
+{
+  "name": "win_lsass_snapshot_stub",
+  "group": "shell",
+  "summary": "Skeleton: sensitive process snapshot flow (no-op)",
+  "requirements": [],
+  "script": "payloads/shell/win_lsass_snapshot_stub.py"
+}
+

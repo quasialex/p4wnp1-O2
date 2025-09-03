@@ -1,0 +1,9 @@
+{
+  "name": "lsa_copy_flow",
+  "group": "shell",
+  "summary": "Skeleton for collecting artifacts via lawful means (no dump code)",
+  "script": "payloads/shell/lsa_copy_flow.py",
+  "requirements": [],
+  "harden": true
+}
+

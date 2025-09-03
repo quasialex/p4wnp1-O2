@@ -1,0 +1,8 @@
+name: win_sam_offline
+group: hid
+summary: Wrapper to run your SAM offline hive copy command
+script: payloads/hid/win_sam_offline_wrapper.py
+env:
+  P4WN_OUT_DIR: "C:\\Users\\Public\\sam_dump"
+  P4WN_SAM_CMD: "REM set this to your private command"
+

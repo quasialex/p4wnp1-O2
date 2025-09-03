@@ -1,0 +1,9 @@
+{
+  "name": "win_script_defender_bypass_stub",
+  "group": "shell",
+  "summary": "Skeleton: script scanning/AMSI research flow (no-op)",
+  "requirements": [],
+  "script": "payloads/shell/win_script_defender_bypass_stub.py",
+  "risks": ["Placeholder only – does nothing."]
+}
+

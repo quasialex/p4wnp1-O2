@@ -1,0 +1,7 @@
+name: win_persist_runner
+group: hid
+summary: Download and run your persistence script over HTTP
+script: payloads/hid/win_persist_runner.py
+env:
+  P4WN_LHOST: "10.0.0.1"
+  PERSIST_URI: "/payloads/persist.ps1"

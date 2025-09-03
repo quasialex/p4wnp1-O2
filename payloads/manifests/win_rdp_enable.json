@@ -1,0 +1,6 @@
+{
+  "name": "win_rdp_enable",
+  "desc": "Enable RDP + open firewall (framework only)",
+  "env": { "P4WN_LHOST": "__AUTO__" },
+  "timeout_sec": 60
+}

@@ -1,0 +1,9 @@
+{
+  "name": "amsi_flow",
+  "group": "shell",
+  "summary": "Skeleton for AMSI-tolerant execution (no bypass code)",
+  "script": "payloads/shell/amsi_flow.py",
+  "requirements": [],
+  "harden": true
+}
+

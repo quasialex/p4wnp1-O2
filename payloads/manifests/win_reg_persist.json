@@ -1,0 +1,1 @@
+{ "name":"win_reg_persist", "desc":"Registry run key scaffold", "timeout_sec": 60 }

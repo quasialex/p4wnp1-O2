@@ -1,0 +1,10 @@
+{
+  "name": "win_priv_flow",
+  "group": "shell",
+  "summary": "Skeleton: Windows privilege-elevation flow (no-op)",
+  "requirements": [],
+  "script": "payloads/shell/win_priv_flow.py",
+  "usage": ["p4wnctl payload run win_priv_flow"],
+  "risks": ["Placeholder only – does nothing."]
+}
+

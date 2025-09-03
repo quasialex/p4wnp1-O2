@@ -1,0 +1,9 @@
+name: win_firewall_openport
+group: hid
+summary: Open a firewall port (inbound allow)
+script: payloads/hid/win_firewall_openport.py
+env:
+  P4WN_FW_PORT: "4444"
+  P4WN_FW_PROTO: "TCP"
+  P4WN_FW_NAME: "P4wnP1 Port"
+

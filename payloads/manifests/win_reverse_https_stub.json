@@ -1,0 +1,8 @@
+{
+  "name": "win_reverse_https_stub",
+  "group": "shell",
+  "summary": "Skeleton: reverse HTTPS launcher flow (no-op)",
+  "requirements": [],
+  "script": "payloads/shell/win_reverse_https_stub.py"
+}
+

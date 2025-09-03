@@ -1,0 +1,13 @@
+{
+  "name": "win_drop_and_run_stub",
+  "group": "shell",
+  "summary": "Plan-only: drop binary and run (no file writes, no exec).",
+  "requirements": [],
+  "harden": false,
+  "script": "payloads/shell/win_drop_and_run_stub.py",
+  "env": {
+    "P4WN_DROP_DST": "%APPDATA%\\Microsoft\\updater.bin",
+    "P4WN_RUN_CMD": "cmd.exe /c start \"\" \"%APPDATA%\\Microsoft\\updater.bin\""
+  }
+}
+

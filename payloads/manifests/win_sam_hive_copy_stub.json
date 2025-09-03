@@ -1,0 +1,10 @@
+{
+  "name": "win_sam_hive_copy_stub",
+  "group": "shell",
+  "summary": "Plan-only: SAM/SYSTEM/SECURITY hive copy via snapshot (no-ops).",
+  "requirements": [],
+  "harden": false,
+  "script": "payloads/shell/win_sam_hive_copy_stub.py",
+  "env": {}
+}
+

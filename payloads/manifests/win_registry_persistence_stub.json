@@ -1,0 +1,8 @@
+{
+  "name": "win_registry_persistence_stub",
+  "group": "shell",
+  "summary": "Skeleton: registry-based persistence flow (no-op)",
+  "requirements": [],
+  "script": "payloads/shell/win_registry_persistence_stub.py"
+}
+

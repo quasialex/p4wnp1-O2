@@ -1,0 +1,8 @@
+name: win_tool_runner
+group: hid
+summary: HID fetches your tool (EXE/PS1) from Pi, executes it, writes output to file
+script: payloads/hid/win_tool_runner.py
+env:
+  P4WN_TOOL_URL: "http://10.13.37.1/payloads/www/private/tool.ps1"
+  P4WN_TOOL_ARGS: ""
+  P4WN_TOOL_OUT: "C:\\Users\\Public\\p4w_out.txt"

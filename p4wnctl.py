@@ -13,6 +13,7 @@ from pathlib import Path
 from textwrap import dedent
 from string import Template
 from ipaddress import ip_interface, IPv4Interface, ip_network
+from pathlib import Path
 
 # ======= Paths / constants =======
 P4WN_HOME = Path(os.environ.get("P4WN_HOME", "/opt/p4wnp1"))
@@ -61,6 +62,11 @@ PORTAL_DIR = P4WN_HOME / "services" / "portal"
 PORTAL_BIN = PORTAL_DIR / "bin" / "portal_ctl.py"
 PORTAL_APACHE_VHOST = PORTAL_DIR / "conf" / "p4wnp1-portal.conf"   # informational
 
+HOSTAPD_CONF      = Path("/etc/hostapd/hostapd-p4wnp1.conf")
+HOSTAPD_CTRL_DIR  = "/run/hostapd"                                 # matches how we launch hostapd
+AP_SEC_STATE_FILE = Path("/run/p4wnp1/hostapd.sec.json")
+CAPTIVE_LOG       = Path("/var/log/p4wnp1/captive.log")
+
 LURE_PID   = RUN_DIR / "wifi_lure.pid"
 LURE_STATE = RUN_DIR / "wifi_lure.json"
 LURE_LIST  = Path("/opt/p4wnp1/config/lure_ssids.txt")
@@ -106,9 +112,10 @@ AP_HOSTAPD_CONF = Path("/etc/hostapd/hostapd-p4wnp1.conf")
 AP_HOSTAPD_LOG = RUN_DIR / "hostapd.ap.log"
 AP_DNSMASQ_LOG = RUN_DIR / "dnsmasq.ap.log"
 
-# --- Bluetooth scan files ---
-BT_SCAN_PID  = RUN_DIR / "ble_scan.pid"
-BT_SCAN_LOG  = RUN_DIR / "ble_scan.jsonl"
+AUTOJOIN_PID = RUN_DIR / "autojoin.pid"
+SYNC_PID     = RUN_DIR / "sync.pid"
+AUTOJOIN_CFG = Path("/opt/p4wnp1/config/autojoin.json")
+SYNC_CFG     = Path("/opt/p4wnp1/config/sync.json")
 
 USB_NET_DEVADDR = os.environ.get("P4WN_USB_DEVADDR", "02:1A:11:00:00:01")
 USB_NET_HOSTADDR = os.environ.get("P4WN_USB_HOSTADDR", "02:1A:11:00:00:02")
@@ -1666,12 +1673,16 @@ def wifi_ap_status():
     print(f"wlan0: {ip or 'down'}")
 
 def wifi_portal_start():
+    # make SSID open for portal
+    _ap_security_push_open()
     # assumes AP already up on wlan0
     if not PORTAL_BIN.exists():
         print("[!] Portal launcher not found:", PORTAL_BIN); return 1
     return sh(f"/usr/bin/env python3 {PORTAL_BIN} start", check=False).returncode
 
 def wifi_portal_stop():
+    # restore management AP security (WPA2-PSK)
+    _ap_security_pop_restore(AP_PSK)
     if not PORTAL_BIN.exists():
         print("[!] Portal launcher not found:", PORTAL_BIN); return 1
     return sh(f"/usr/bin/env python3 {PORTAL_BIN} stop", check=False).returncode
@@ -1870,9 +1881,162 @@ def usb_set(mode: str) -> int:
     print(usb_status_text())
     return 0
 
+def _hostapd_conf_text():
+    return HOSTAPD_CONF.read_text(encoding="utf-8", errors="ignore")
+
+def _hostapd_write(text: str):
+    HOSTAPD_CONF.parent.mkdir(parents=True, exist_ok=True)
+    HOSTAPD_CONF.write_text(text, encoding="utf-8")
+
+def _hostapd_reconfigure():
+    sh(f"hostapd_cli -p {HOSTAPD_CTRL_DIR} reconfigure", check=False)
+
+def _ap_detect_mode():
+    """Return ('secure', psk) or ('open', None) from current hostapd conf."""
+    txt = _hostapd_conf_text()
+    m = re.search(r"(?m)^wpa_passphrase=(.*)$", txt)
+    if m:
+        return ("secure", m.group(1).strip())
+    return ("open", None)
+
+def _ap_set_open():
+    """Make SSID OPEN (no WPA lines)."""
+    txt = _hostapd_conf_text()
+    # remove all WPA lines
+    txt = re.sub(r"(?m)^(wpa=.*|wpa_key_mgmt=.*|rsn_pairwise=.*|wpa_passphrase=.*)\s*$\n?", "", txt)
+    # ensure auth_algs=1 exists (open)
+    if not re.search(r"(?m)^auth_algs=", txt):
+        txt = txt.rstrip() + "\nauth_algs=1\n"
+    _hostapd_write(txt)
+    _hostapd_reconfigure()
+
+def _ap_set_secure(psk: str):
+    """Make SSID WPA2-PSK with the given passphrase."""
+    txt = _hostapd_conf_text()
+    # strip any current WPA lines, then append ours
+    txt = re.sub(r"(?m)^(wpa=.*|wpa_key_mgmt=.*|rsn_pairwise=.*|wpa_passphrase=.*)\s*$\n?", "", txt)
+    block = (
+        "wpa=2\n"
+        "wpa_key_mgmt=WPA-PSK\n"
+        "rsn_pairwise=CCMP\n"
+        f"wpa_passphrase={psk}\n"
+    )
+    txt = txt.rstrip() + "\n" + block
+    _hostapd_write(txt)
+    _hostapd_reconfigure()
+
+def _ap_security_push_open():
+    """Save current mode -> /run/p4wnp1/hostapd.sec.json, then set OPEN."""
+    AP_SEC_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    mode, psk = _ap_detect_mode()
+    AP_SEC_STATE_FILE.write_text(json.dumps({"mode": mode, "psk": psk or ""}), encoding="utf-8")
+    _ap_set_open()
+
+def _ap_security_pop_restore(default_psk: str):
+    """Restore saved mode, defaulting to WPA2-PSK with provided PSK."""
+    try:
+        st = json.loads(AP_SEC_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        st = {"mode": "secure", "psk": default_psk}
+    if st.get("mode") == "secure":
+        _ap_set_secure(st.get("psk") or default_psk)
+    else:
+        _ap_set_open()
+
+# ------------ WiFi & Sync Helpers ------------
+
+def _autojoin_cfg_read():
+    if AUTOJOIN_CFG.exists():
+        try: return json.loads(AUTOJOIN_CFG.read_text())
+        except Exception: pass
+    return {"interval": 20, "known": []}
+
+def _autojoin_cfg_write(cfg):
+    AUTOJOIN_CFG.parent.mkdir(parents=True, exist_ok=True)
+    AUTOJOIN_CFG.write_text(json.dumps(cfg, indent=2))
+
+def wifi_autojoin_start():
+    if AUTOJOIN_PID.exists():
+        print("[*] Auto-join already running."); return 0
+    p = subprocess.Popen([sys.executable, "/opt/p4wnp1/tools/net_autojoin.py"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    write_pid(AUTOJOIN_PID, p.pid)
+    print(f"Auto-join started (pid {p.pid})."); return 0
+
+def wifi_autojoin_stop():
+    pid = read_pid(AUTOJOIN_PID)
+    if not pid: print("[*] Auto-join not running."); return 0
+    try: os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    AUTOJOIN_PID.unlink(missing_ok=True)
+    print("Auto-join stopped."); return 0
+
+def wifi_autojoin_status():
+    print("Auto-join:", "running" if AUTOJOIN_PID.exists() else "stopped")
+    cfg = _autojoin_cfg_read()
+    print(" interval:", cfg.get("interval", 20), "s")
+    print(" known:", ", ".join([k.get("ssid","") for k in cfg.get("known", [])]) or "(none)")
+    return 0
+
+def wifi_autojoin_interval(sec):
+    try: sec = int(sec)
+    except ValueError: print("interval must be int"); return 1
+    cfg = _autojoin_cfg_read(); cfg["interval"] = sec; _autojoin_cfg_write(cfg)
+    print("Auto-join interval set to", sec, "s"); return 0
+
+def wifi_autojoin_add(ssid, psk, hidden=False):
+    cfg = _autojoin_cfg_read()
+    known = [k for k in cfg.get("known", []) if k.get("ssid") != ssid]
+    known.append({"ssid": ssid, "psk": psk, "hidden": bool(hidden)})
+    cfg["known"] = known; _autojoin_cfg_write(cfg)
+    print(f"Added network '{ssid}'."); return 0
+
+def wifi_autojoin_remove(ssid):
+    cfg = _autojoin_cfg_read()
+    before = len(cfg.get("known", []))
+    cfg["known"] = [k for k in cfg.get("known", []) if k.get("ssid") != ssid]
+    _autojoin_cfg_write(cfg)
+    print(f"Removed '{ssid}' ({before - len(cfg['known'])} entries)."); return 0
+
+def _sync_cfg_read():
+    if SYNC_CFG.exists():
+        try: return json.loads(SYNC_CFG.read_text())
+        except Exception: pass
+    return {"interval": 30, "host": "", "user": "", "dest": "/srv/p4wnp1", "key": "/opt/p4wnp1/config/sync_id_ed25519", "paths": ["/opt/p4wnp1/loot"]}
+
+def _sync_cfg_write(cfg):
+    SYNC_CFG.parent.mkdir(parents=True, exist_ok=True)
+    SYNC_CFG.write_text(json.dumps(cfg, indent=2))
+
+def wifi_sync_start():
+    if SYNC_PID.exists():
+        print("[*] Sync already running."); return 0
+    p = subprocess.Popen([sys.executable, "/opt/p4wnp1/tools/loot_sync.py"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    write_pid(SYNC_PID, p.pid)
+    print(f"Sync started (pid {p.pid})."); return 0
+
+def wifi_sync_stop():
+    pid = read_pid(SYNC_PID)
+    if not pid: print("[*] Sync not running."); return 0
+    try: os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    SYNC_PID.unlink(missing_ok=True)
+    print("Sync stopped."); return 0
+
+def wifi_sync_status():
+    print("Sync:", "running" if SYNC_PID.exists() else "stopped")
+    print(json.dumps(_sync_cfg_read(), indent=2)); return 0
+
+def wifi_sync_config_set(**kw):
+    cfg = _sync_cfg_read(); cfg.update({k:v for k,v in kw.items() if v is not None}); _sync_cfg_write(cfg)
+    print("Sync config updated."); return 0
+
 # ------------------------------- WiFi Lures --------------------------------
 
 def wifi_lure_start():
+    # lure should be open (no password)
+    _ap_security_push_open()
     if LURE_PID.exists():
         print("[*] Wi-Fi lure already running."); return 0
     env = os.environ.copy()
@@ -1893,7 +2057,9 @@ def wifi_lure_stop():
     pid = read_pid(LURE_PID)
     if not pid:
         print("[*] Wi-Fi lure not running."); return 0
-    try: os.kill(pid, signal.SIGTERM)
+    try: 
+        _ap_security_pop_restore(AP_PSK)
+        os.kill(pid, signal.SIGTERM)
     except ProcessLookupError: pass
     LURE_PID.unlink(missing_ok=True)
     print("Wi-Fi lure stopped.")
@@ -1980,46 +2146,15 @@ def portal_status():
         print(tail, end="")
     return 0
 
-# ------------------------------- BLE Helpers --------------------------------
-
-def bt_scan_start():
-    if BT_SCAN_PID.exists():
-        print("[*] BLE scan already running.")
-        return 0
-    env = os.environ.copy()
-    env.setdefault("P4WN_BLE_LOG", str(BT_SCAN_LOG))
-    p = subprocess.Popen(
-        [sys.executable, "/opt/p4wnp1/tools/ble_scan.py"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env
-    )
-    write_pid(BT_SCAN_PID, p.pid)
-    print(f"BLE scan started (pid {p.pid}), logging to {BT_SCAN_LOG}")
+def wifi_portal_logs(n=50):
+    n = int(n)
+    if not CAPTIVE_LOG.exists():
+        print("[!] No portal log yet at", CAPTIVE_LOG); return 1
+    cp = sh(f"tail -n {n} {CAPTIVE_LOG}", check=False)
+    print(cp.stdout, end="");
+    if cp.stderr: print(cp.stderr, end="", file=sys.stderr)
     return 0
 
-def bt_scan_stop():
-    pid = read_pid(BT_SCAN_PID)
-    if not pid:
-        print("[*] BLE scan not running.")
-        return 0
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    BT_SCAN_PID.unlink(missing_ok=True)
-    print("BLE scan stopped.")
-    return 0
-
-def bt_scan_status():
-    running = BT_SCAN_PID.exists()
-    print(f"BLE scan: {'running' if running else 'stopped'}")
-    if BT_SCAN_LOG.exists():
-        try:
-            tail = subprocess.check_output(["tail","-n","10",str(BT_SCAN_LOG)], text=True)
-            print("---- last 10 beacons ----")
-            print(tail, end="")
-        except Exception:
-            pass
-    return 0
 # ------------ Payload discovery / manifests ------------
 try:
     import yaml  # optional
@@ -3007,7 +3142,6 @@ Subcommands:
   template    Render a text file replacing __HOST__ with device IP
 """)
 
-
 USB_HELP = dedent("""\
 USB gadget controls
 -------------------
@@ -3031,7 +3165,7 @@ Wi-Fi controls
 Commands:
   wifi status
   wifi ap start | stop | status
-  wifi portal start | stop | status                         # Wi-Fi Captive portal
+  wifi portal start | stop | status | logs [n]              # Captive portal (+ log tail)
   wifi client join "<ssid>" "<psk>" [--hidden]
   wifi client disconnect | status
   wifi relay start | stop | status
@@ -3042,6 +3176,8 @@ Commands:
   wifi config show
   wifi diag
   wifi driver-reset
+  wifi client auto start | stop | status | add "<ssid>" "<psk>" [--hidden] | remove "<ssid>" | interval <sec>
+  wifi sync start | stop | status | config set --host <h> --user <u> --dest <path> [--key <file>] [--interval <sec>] | config show
 """)
 
 PAYLOAD_HELP = dedent("""\
@@ -3223,6 +3359,11 @@ def main() -> int:
         if sub == "driver-reset":
             return wifi_driver_reset()
         if sub == "ap":
+            if len(sys.argv) < 3:
+                print("usage: wifi ap start | stop | status | open | secure"); return 2
+            act = sys.argv[3] if len(sys.argv) > 3 else ""
+            if act == "open":   _ap_set_open();   return 0
+            if act == "secure": _ap_set_secure(AP_PSK); return 0
             if len(sys.argv) == 4:
                 act = sys.argv[3].lower()
                 if act == "start":
@@ -3237,7 +3378,7 @@ def main() -> int:
                     return wifi_ap_stop()
                 if act == "status":
                     return wifi_ap_status()
-            print("usage: wifi ap start | stop | status"); return 1
+            print("usage: wifi ap start | stop | status | open | secure"); return 2
         if sub == "set":
             if len(sys.argv) < 5:
                 print('usage:\n  wifi set ssid "<str>"\n  wifi set password "<str>"\n  wifi set cidr "<ip/mask>"\n  wifi set hidden <yes|no>\n  wifi set channel <n>')
@@ -3260,17 +3401,20 @@ def main() -> int:
             print("usage: wifi config show"); return 1
 
         if sub == "client":
-            if len(sys.argv) >= 4 and sys.argv[3].lower() == "join":
-                if len(sys.argv) < 6:
-                    print('usage: wifi client join "<ssid>" "<psk>" [--hidden]'); return 1
-                ssid = sys.argv[4]; psk = sys.argv[5]
-                hidden = any(a.lower() == "--hidden" for a in sys.argv[6:])
-                return wifi_client_join(ssid, psk, hidden)
-            if len(sys.argv) == 4 and sys.argv[3].lower() == "disconnect":
-                return wifi_client_disconnect()
-            if len(sys.argv) == 4 and sys.argv[3].lower() == "status":
-                return wifi_client_status()
-            print(WIFI_HELP.rstrip()); return 1
+            # existing join/disconnect/status branch remains
+            if len(sys.argv) >= 4 and sys.argv[3].lower() == "auto":
+                act = sys.argv[4].lower() if len(sys.argv) > 4 else ""
+                if act == "start":  return wifi_autojoin_start()
+                if act == "stop":   return wifi_autojoin_stop()
+                if act == "status": return wifi_autojoin_status()
+                if act == "add" and len(sys.argv) >= 7:
+                    return wifi_autojoin_add(sys.argv[5], sys.argv[6], any(a == "--hidden" for a in sys.argv[7:]))
+                if act == "remove" and len(sys.argv) >= 6:
+                    return wifi_autojoin_remove(sys.argv[5])
+                if act == "interval" and len(sys.argv) >= 6:
+                    return wifi_autojoin_interval(sys.argv[5])
+                print('usage: wifi client auto start|stop|status|add "<ssid>" "<psk>" [--hidden] | remove "<ssid>" | interval <sec>')
+                return 1
 
         if sub == "relay":
             if len(sys.argv) == 4 and sys.argv[3].lower() == "start":
@@ -3299,7 +3443,35 @@ def main() -> int:
             if act == "start":  return portal_start()
             if act == "stop":   return portal_stop()
             if act == "status": return portal_status()
+            if act == "logs":
+                count = sys.argv[4] if len(sys.argv) > 4 else "50"
+                return wifi_portal_logs(count)
             print("usage: wifi portal start|stop|status"); return 1
+
+        if sub == "sync":
+            act = sys.argv[3].lower() if len(sys.argv) > 3 else ""
+            if act == "start":  return wifi_sync_start()
+            if act == "stop":   return wifi_sync_stop()
+            if act == "status": return wifi_sync_status()
+            if act == "config":
+                if len(sys.argv) > 4 and sys.argv[4].lower() == "show":
+                    print(json.dumps(_sync_cfg_read(), indent=2)); return 0
+                if len(sys.argv) > 4 and sys.argv[4].lower() == "set":
+                    args = sys.argv[5:]; host=user=dest=key=interval=None
+                    i=0
+                    while i < len(args):
+                        if args[i] == "--host" and i+1 < len(args): host = args[i+1]; i+=2; continue
+                        if args[i] == "--user" and i+1 < len(args): user = args[i+1]; i+=2; continue
+                        if args[i] == "--dest" and i+1 < len(args): dest = args[i+1]; i+=2; continue
+                        if args[i] == "--key"  and i+1 < len(args): key  = args[i+1]; i+=2; continue
+                        if args[i] == "--interval" and i+1 < len(args):
+                            try: interval = int(args[i+1])
+                            except: pass
+                            i+=2; continue
+                        i+=1
+                    return wifi_sync_config_set(host=host, user=user, dest=dest, key=key, interval=interval)
+            print("usage: wifi sync start|stop|status|config show|config set --host <h> --user <u> --dest <path> [--key <file>] [--interval <sec>]")
+            return 1
 
         print(WIFI_HELP.rstrip()); return 1
 
@@ -3455,20 +3627,6 @@ def main() -> int:
                     print(WEB_HELP.rstrip()); return 1
                 return web_config_set(host, port)
         print(WEB_HELP.rstrip()); return 1
-
-    # ble
-    if cmd == "bt":
-        if len(sys.argv) < 3:
-            print("Bluetooth controls\n-------------------\nCommands:\n  bt scan start|stop|status")
-            return 0
-        sub = sys.argv[2]
-        if sub == "scan":
-            act = sys.argv[3] if len(sys.argv)>3 else ""
-            if act == "start": return bt_scan_start()
-            if act == "stop":  return bt_scan_stop()
-            if act == "status":return bt_scan_status()
-            print("Usage: bt scan start|stop|status"); return 2
-        print("Unknown bt command"); return 2
 
     # net
     if cmd == "net":

@@ -1,0 +1,1 @@
+{ "name":"win_browser_dump", "desc":"Browser credential dump scaffold", "timeout_sec": 120 }
