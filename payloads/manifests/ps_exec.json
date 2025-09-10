@@ -1,0 +1,8 @@
+{
+  "name": "ps_exec",
+  "type": "hid",
+  "entry": "ps_exec.py",
+  "description": "Type a PowerShell command via HID.",
+  "args": ["@/opt/p4wnp1/payloads/hid/ps_command.txt"]
+}
+

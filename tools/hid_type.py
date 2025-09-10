@@ -12,6 +12,11 @@ P4wnP1-O2 HID typing helper
 import os, sys, time, argparse, stat
 from typing import Optional, Tuple
 
+# near the top after imports:
+CDELAY = float(os.environ.get("P4WN_CDELAY", "0.01"))
+RDELAY = float(os.environ.get("P4WN_RDELAY", "0.01"))
+# then make cdelay/rdelay default to CDELAY/RDELAY in type_string/send_combo
+
 DEFAULT_DEV_CANDIDATES = [f"/dev/hidg{i}" for i in range(0, 8)]
 MOD_NONE   = 0x00
 MOD_CTRL   = 0x01
@@ -76,25 +81,57 @@ def _send(devf, mod: int, code: int, cdelay=0.01, rdelay=0.01):
     devf.write(b"\x00\x00\x00\x00\x00\x00\x00\x00"); devf.flush()
     time.sleep(rdelay)
 
-def _type_char(devf, ch: str, cdelay: float, rdelay: float):
-    mod, code = KEYMAP.get(ch, (MOD_NONE, KEY_SPACE))
+def _type_char(devf, ch: str, cdelay: float, rdelay: float, after_space_gap: float):
+    # fail fast instead of silently inserting spaces
+    if ch not in KEYMAP:
+        raise ValueError(f"Character {ch!r} not supported by KEYMAP")
+    mod, code = KEYMAP[ch]
     _send(devf, mod, code, cdelay, rdelay)
+    # extra settle time after whitespace to avoid mid-string drops
+    if ch in (' ', '\t', '\n') and after_space_gap > 0:
+        time.sleep(after_space_gap)
 
-def type_string(text: str, dev: Optional[str] = None,
-                cdelay: float = 0.01, rdelay: float = 0.01, dry_run: bool = False):
-    """Type an entire string to the HID gadget (\\n sends Enter)."""
+def type_string(
+    text: str,
+    dev: Optional[str] = None,
+    cdelay: float = 0.02,
+    rdelay: float = 0.02,
+    dry_run: bool = False,
+    pre_delay: float = 0.15,
+    sync_enter: bool = False,
+    warmup: int = 3,
+    after_space_gap: float = 0.05,
+):
+    """Type a string to the HID gadget.
+    - pre_delay: sleep once before any key (host USB stack settle)
+    - sync_enter: optionally send an Enter before typing (brings focus)
+    - warmup: first N chars are sent slightly slower
+    - after_space_gap: small pause after whitespace, avoids 'word after space' drops
+    """
     if dry_run:
         out = []
         for ch in text:
-            mod, code = KEYMAP.get(ch, (MOD_NONE, KEY_SPACE))
+            if ch not in KEYMAP:
+                out.append(f"{repr(ch)}->(unsupported)")
+                continue
+            mod, code = KEYMAP[ch]
             tag = ("S+" if (mod & MOD_SHIFT) else "") + f"{code:02x}"
             out.append(f"{repr(ch)}->{tag}")
         print("DRY:", " ".join(out)); return
 
     path = find_hid_device(dev)
     with open(path, "wb", buffering=0) as f:
-        for ch in text:
-            _type_char(f, ch, cdelay, rdelay)
+        time.sleep(max(0.0, pre_delay))
+        if sync_enter:
+            _send(f, MOD_NONE, KEY_ENTER, max(cdelay, 0.02), max(rdelay, 0.02))
+            time.sleep(0.06)
+
+        for i, ch in enumerate(text):
+            # slightly slower for the first few chars
+            if i < max(0, int(warmup)):
+                _type_char(f, ch, max(0.03, cdelay), max(0.03, rdelay), after_space_gap)
+            else:
+                _type_char(f, ch, cdelay, rdelay, after_space_gap)
 
 # Convenience combos
 def send_combo(mod: int, code: int, dev: Optional[str] = None,
@@ -113,15 +150,29 @@ def win_r(dev: Optional[str] = None):
 def _main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Type a string via /dev/hidgN (USB HID keyboard).")
     ap.add_argument("--device", "-d", help="HID gadget device (default: auto)")
-    ap.add_argument("--cdelay", type=float, default=0.01)
-    ap.add_argument("--rdelay", type=float, default=0.01)
+    ap.add_argument("--cdelay", type=float, default=0.02)
+    ap.add_argument("--rdelay", type=float, default=0.02)
+    ap.add_argument("--pre-delay", type=float, default=0.15, help="Initial delay before first key")
+    ap.add_argument("--sync-enter", action="store_true", help="Send an Enter before typing")
+    ap.add_argument("--warmup", type=int, default=3, help="First N chars use slightly slower delays")
+    ap.add_argument("--after-space-gap", type=float, default=0.05, help="Extra pause after spaces/tabs/newlines")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("text", nargs='?', help="text to type")
     args = ap.parse_args(argv)
     if args.text is None:
         ap.print_help(); return 1
     try:
-        type_string(args.text, dev=args.device, cdelay=args.cdelay, rdelay=args.rdelay, dry_run=args.dry_run)
+        type_string(
+            args.text,
+            dev=args.device,
+            cdelay=args.cdelay,
+            rdelay=args.rdelay,
+            dry_run=args.dry_run,
+            pre_delay=args.pre_delay,
+            sync_enter=args.sync_enter,
+            warmup=args.warmup,
+            after_space_gap=args.after_space_gap,
+        )
     except Exception as e:
         print(f"[!] {e}", file=sys.stderr); return 1
     return 0

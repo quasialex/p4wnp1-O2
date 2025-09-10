@@ -1,0 +1,15 @@
+# /opt/p4wnp1/config/triggers/usb.yml
+# Actions run when the USB link toggles.
+# Each action is a shell command array or string (runs via bash -lc).
+on_attach:
+  - type: command
+    run:
+      - /usr/bin/logger
+      - "p4wnp1: USB configured (attach)"
+
+on_detach:
+  - type: command
+    run:
+      - /usr/bin/logger
+      - "p4wnp1: USB not attached (detach)"
+

@@ -1,0 +1,28 @@
+{
+  "name": "hid_rndis_cdrom",
+  "idVendor": "0x1d6b",
+  "idProduct": "0x0104",
+  "bcdUSB": "0x0200",
+  "bcdDevice": "0x0100",
+  "manufacturer": "P4wnP1-O2",
+  "product": "P4wnP1 O2",
+  "serial": "deadbeef",
+  "configuration": "Config 1",
+  "MaxPower": 250,
+  "udc": null,
+  "functions": {
+    "hid": [
+      { "name": "hid.kbd", "protocol": 1, "subclass": 1, "report_length": 8 }
+    ],
+    "mouse": [],
+    "ecm": [],
+    "rndis": [
+      { "name": "rndis.usb0", "host_addr": "12:34:56:78:9a:bd", "dev_addr": "02:00:00:00:00:02" }
+    ],
+    "acm": [],
+    "mass_storage": [
+      { "name": "msd.0", "file": "/opt/p4wnp1/images/cd.iso", "ro": true, "cdrom": true, "removable": false, "stall": false }
+    ]
+  }
+}
+

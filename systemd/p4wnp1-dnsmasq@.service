@@ -1,0 +1,13 @@
+[Unit]
+Description=P4wnP1-O2 dnsmasq for %i
+After=network-pre.target
+Before=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq --no-daemon --conf-file=/opt/p4wnp1/config/net/dnsmasq-%i.conf
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+

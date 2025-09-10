@@ -1,0 +1,13 @@
+[Unit]
+Description=P4wnP1-O2 Web API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /opt/p4wnp1/web/app.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+

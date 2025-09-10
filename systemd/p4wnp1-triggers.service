@@ -1,0 +1,14 @@
+[Unit]
+Description=P4wnP1-O2 Triggers Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /opt/p4wnp1/bin/triggerd.py
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,9 @@
+{
+  "name": "test_typing",
+  "description": "Open Notepad and type one line (HID smoke test)",
+  "path": "/opt/p4wnp1/payloads/hid/test_typing.py",
+  "args": [],
+  "env": {},
+  "usb_profile": "inherit"
+}
+

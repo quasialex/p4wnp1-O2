@@ -1,0 +1,15 @@
+# /etc/systemd/system/p4wnp1-usb-events.service
+[Unit]
+Description=P4wnP1-O2 USB attach/detach watcher
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env python3 /opt/p4wnp1/bin/p4wnp1-usb-events.py
+Restart=always
+RestartSec=1
+User=root
+
+[Install]
+WantedBy=multi-user.target

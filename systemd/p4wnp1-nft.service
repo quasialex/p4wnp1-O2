@@ -1,0 +1,13 @@
+[Unit]
+Description=P4wnP1-O2 nftables rules
+After=network-pre.target
+Before=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft -f /opt/p4wnp1/config/net/nftables-p4wnp1.nft
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+

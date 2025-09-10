@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os
-import re
-import sys
-import json
-import time
-import curses
-import signal
-import socket
-import subprocess
+import os, re, sys, json, time, curses, signal, socket, subprocess, shlex
 from pathlib import Path
 from textwrap import dedent
 from string import Template
 from ipaddress import ip_interface, IPv4Interface, ip_network
-from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+# --- Single-source HID report descriptor from hid_type (if available) ---
+# We prefer to import the descriptor from hid_type.py to avoid having multiple
+# copies of the keyboard report descriptor across the codebase. If hid_type
+# isn't available or doesn't export a descriptor, we fall back to None; the
+# code in _hid_report_desc_bytes() will then use the built-in bytes.
+try:
+    from hid_type import KEYBOARD_REPORT_DESC as __HID_DESC
+except Exception:
+    try:
+        from hid_type import REPORT_DESC as __HID_DESC
+    except Exception:
+        try:
+            from hid_type import keyboard_report_desc_bytes as __hid_desc_factory
+            __HID_DESC = __hid_desc_factory() if callable(__hid_desc_factory) else __hid_desc_factory
+        except Exception:
+            __HID_DESC = None
 
 # ======= Paths / constants =======
 P4WN_HOME = Path(os.environ.get("P4WN_HOME", "/opt/p4wnp1"))
@@ -23,7 +32,7 @@ USB_GADGET = Path("/sys/kernel/config/usb_gadget/p4wnp1")
 ACTIVE_PAYLOAD_FILE = CONFIG / "active_payload"
 RUN_DIR      = Path("/run/p4wnp1")
 
-WEBUI_UNIT = "p4wnp1-webui.service"
+WEBUI_UNIT = "p4wnp1-web.service"
 WEBUI_OVERRIDE_DIR = Path(f"/etc/systemd/system/{WEBUI_UNIT}.d")
 WEBUI_OVERRIDE_FILE = WEBUI_OVERRIDE_DIR / "override.conf"
 
@@ -577,6 +586,13 @@ def usb_replug() -> int:
         return 1
 
 def _hid_report_desc_bytes() -> bytes:
+    """
+    Return HID keyboard report descriptor.
+    Prefer the implementation provided by hid_type (single source of truth);
+    fall back to the built-in descriptor (unchanged) if unavailable.
+    """
+    if isinstance(__HID_DESC, (bytes, bytearray)):
+        return bytes(__HID_DESC)
     return bytes([
         0x05,0x01, 0x09,0x06, 0xA1,0x01, 0x05,0x07,
         0x19,0xE0, 0x29,0xE7, 0x15,0x00, 0x25,0x01,
@@ -2361,9 +2377,9 @@ def payload_start(name: str, extra_args: list[str] | None = None) -> int:
             "--property=ProtectHome=yes",
         ]
     for k, v in (env or {}).items():
-        props.append(f"--setenv={k}={v}")
+        props.append("--setenv=" + shlex.quote(f"{k}={v}"))
     if wdir:
-        props.append(f"--working-directory={wdir}")
+        props.append(f"--working-directory={shlex.quote(wdir)}")
 
     if cmd:
         final_cmd = _apply_env_and_cwd(cmd, None, None)
@@ -2637,14 +2653,8 @@ def payload_requirements_for(name: str) -> list[str]:
 
 def ensure_for_requirements(reqs: list[str]) -> int:
     """
-    Bring up the exact gadget functions (HID/NET/MSD/Serial) and auxiliary services
-    required by a manifest or by an inferred payload group.
-
-    Special requirement keys (strings, case-insensitive):
-      - "hid", "net"/"usbnet", "msd"/"storage", "serial"/"acm"
-      - "payload_web" / "payload-http"  -> start HTTP payload file server (:80)
-      - "payload_web_https" / "payload-https" -> start HTTPS payload file server (:443)
-      - "tmux" -> warn if tmux missing (no-op otherwise)
+    Make USB capabilities additive: if a payload wants HID, we ensure HID,
+    but we DO NOT remove already-present functions (NET/MSD/ACM).
     """
     reqs = [str(r).lower() for r in (reqs or [])]
 
@@ -2653,25 +2663,36 @@ def ensure_for_requirements(reqs: list[str]) -> int:
     want_msd = ("msd" in reqs) or ("storage" in reqs)
     want_acm = ("serial" in reqs) or ("acm" in reqs)
 
-    # Only touch the gadget when any USB capability is requested.
-    if want_hid or want_net or want_msd or want_acm:
-        rc = usb_compose_apply(want_hid, want_net, want_msd, want_acm)
+    # Current caps (from active config links)
+    caps = usb_caps_now()  # {'hid','net','msd','acm': bool}
+    # Target = current OR requested (never downgrade)
+    tgt_hid = caps["hid"] or want_hid
+    tgt_net = caps["net"] or want_net
+    tgt_msd = caps["msd"] or want_msd
+    tgt_acm = caps["acm"] or want_acm
+
+    # Only (re)compose if we need to ADD something
+    need_change = (tgt_hid != caps["hid"]) or (tgt_net != caps["net"]) or \
+                  (tgt_msd != caps["msd"]) or (tgt_acm != caps["acm"])
+    if need_change:
+        # Choose a default net type when we add NET for the first time.
+        nettype_default = os.environ.get("P4WN_NETTYPE_DEFAULT", "all").lower()
+        if nettype_default not in ("all","ncm","ecm","rndis"): nettype_default = "all"
+        rc = usb_compose_apply(tgt_hid, tgt_net, tgt_msd, tgt_acm, nettype=nettype_default)
         if rc != 0:
             return rc
 
-    # Payload web servers
+    # Payload web servers / tmux hints unchanged
     if ("payload_web" in reqs) or ("payload-http" in reqs):
         payloadweb_start()
-
     if ("payload_web_https" in reqs) or ("payload-https" in reqs):
         payloadweb_https_start()
-
     if "tmux" in reqs and not which("tmux"):
         print("[!] tmux not found; install tmux for best results.", file=sys.stderr)
 
     return 0
 
-def payload_run_now(name: str) -> int:
+def payload_run_now(name: str, extra_args: Optional[List[str]] = None) -> int:
     # Prevent shooting ourselves in the foot: if a payload will flip wlan0 into AP mode
     # and our current SSH session is on wlan0, refuse unless explicitly forced.
     dangerous = name.lower().startswith("wifi_ap_")
@@ -2693,7 +2714,7 @@ def payload_run_now(name: str) -> int:
     rc = ensure_for_requirements(reqs)
     if rc != 0:
         return rc
-    return payload_start(name)
+    return payload_start(name, extra_args)
 
 # ------------ Web UI ------------
 def web_status_text() -> str:
@@ -3190,12 +3211,13 @@ Commands:
   payload status             # shows active payload pointer
   payload status all         # transient runner states for all discovered payloads
   payload status <name>
-  payload start <name>       # runs using manifest (cmd|bin|script)
-  payload run <name|active>   # ensure USB/WiFi prereqs, then start (alias: run-now)
+  payload start <name> [-- <args...>]     # runs using manifest (cmd|bin|script)
+  payload run <name|active> [-- <args...>]  # ensure USB/WiFi prereqs, then start (alias: run-now)
   payload stop <name>
   payload logs <name>
   payload describe <name>
 """)
+
 
 PAYLOADWEB_HELP = dedent(f"""\
 usage: 
@@ -3576,14 +3598,19 @@ def main() -> int:
             print(PAYLOAD_HELP.rstrip()); return 1
         if sub == "start":
             if len(sys.argv) < 4:
-                print("usage: p4wnctl payload start <name> [-- <args...>]"); return 1
+                print("usage: p4wnctl payload start <name> [-- <args.>]"); return 1
             extra = sys.argv[4:]
             if extra and extra[0] == "--":
                 extra = extra[1:]
             return payload_start(sys.argv[3], extra)
         if sub in ("run", "run-now"):
+            if len(sys.argv) < 3:
+                print("usage: p4wnctl payload run <name|active> [-- <args...>]"); return 1
             nm = sys.argv[3] if len(sys.argv) >= 4 else "active"
-            return payload_run_now(nm)
+            extra = sys.argv[4:]
+            if extra and extra[0] == "--":
+                extra = extra[1:]
+            return payload_run_now(nm, extra)
         if sub == "stop":
             if len(sys.argv) < 4: print("usage: p4wnctl payload stop <name>"); return 1
             return payload_stop(sys.argv[3])

@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# Runs a payload Python script with /opt/p4wnp1 on sys.path so
+# 'from payloads...'/local project imports work everywhere (incl. systemd-run).
+import os, sys, runpy
+from pathlib import Path
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: p4wpy <script.py> [args...]", file=sys.stderr)
+        return 2
+    root = Path(os.environ.get("P4WN_HOME", "/opt/p4wnp1"))
+    # Prepend project roots so payloads can import 'p4wnhid', 'hid_type', 'payloads.*', etc.
+    sys.path.insert(0, str(root))
+    sys.path.insert(1, str(root / "payloads"))
+    sys.path.insert(2, str(root / "lib"))
+    os.environ.setdefault("P4WN_HOME", str(root))
+
+    script = os.path.abspath(sys.argv[1])
+    sys.argv = [script] + sys.argv[2:]   # pass through args to target
+    # Execute target in this interpreter so sys.path/env stay in effect
+    runpy.run_path(script, run_name="__main__")
+
+if __name__ == "__main__":
+    sys.exit(main())

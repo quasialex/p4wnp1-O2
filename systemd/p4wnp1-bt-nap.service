@@ -1,0 +1,13 @@
+[Unit]
+Description=P4wnP1-O2 Bluetooth NAP
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 /opt/p4wnp1/bin/bt_nap.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+

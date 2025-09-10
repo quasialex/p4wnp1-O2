@@ -230,7 +230,8 @@ def _usb_caps_from_text(txt: str):
     hid = ("hid" in t)
     net = any(k in t for k in ("net", "ecm", "rndis", "ether"))
     msd = any(k in t for k in ("msd", "storage", "mass"))
-    return {"hid": hid, "net": net, "msd": msd}
+    acm = ("acm" in t or "ttygs0" in t)
+    return {"hid": hid, "net": net, "msd": msd, "acm": acm}
 
 def usb_caps() -> dict:
     try:
@@ -277,27 +278,36 @@ def _apply_usb_preset(hid: bool, net: bool, msd: bool) -> tuple[bool, str]:
 
 def handle_usb_compose(query: str):
     """
-    Supports e.g. oled://usb_compose?hid=toggle, net=on, msd=off
-    Now delegates to p4wnctl usb compose.
+    Supports e.g. oled://usb_compose?hid=toggle&net=on&msd=off&acm=toggle&nettype=rndis
+    Delegates to: p4wnctl usb compose --hid=... --net=... --msd=... [--acm=...] [--nettype=...]
     """
-    caps = usb_caps()  # current booleans
+    caps = usb_caps()  # current booleans (now includes 'acm')
     params = urllib.parse.parse_qs(query, keep_blank_values=True)
 
-    def norm(v, cur):
-        if not v: return cur
-        s = v[0].strip().lower()
-        if s in ("1","on","true","yes"): return True
-        if s in ("0","off","false","no"): return False
+    def norm_bool(vlist, cur):
+        if not vlist: return cur
+        s = vlist[0].strip().lower()
+        if s in ("1","on","true","yes","y"): return True
+        if s in ("0","off","false","no","n"): return False
         if s == "toggle": return (not cur)
         return cur
 
-    hid = norm(params.get("hid"), caps["hid"])
-    net = norm(params.get("net"), caps["net"])
-    msd = norm(params.get("msd"), caps["msd"])
+    hid = norm_bool(params.get("hid"), caps.get("hid", False))
+    net = norm_bool(params.get("net"), caps.get("net", False))
+    msd = norm_bool(params.get("msd"), caps.get("msd", False))
+    acm = norm_bool(params.get("acm"), caps.get("acm", False))
+    nettype = (params.get("nettype", ["all"])[0] or "all").lower()
+    if nettype not in ("all", "rndis", "ncm", "ecm"): nettype = "all"
 
-    cmd = f"{P4WN_HOME}/p4wnctl.py usb compose --hid={1 if hid else 0} --net={1 if net else 0} --msd={1 if msd else 0}"
+    cmd = (
+        f"{P4WN_HOME}/p4wnctl.py usb compose "
+        f"--hid={1 if hid else 0} --net={1 if net else 0} --msd={1 if msd else 0} "
+        f"--acm={1 if acm else 0} --nettype={nettype}"
+    )
     ok, msg = run_cmd_like(cmd, "usb_compose")
-    return ok, f"USB -> H:{int(hid)} N:{int(net)} M:{int(msd)}\n{msg}"
+    summary = f"USB → HID:{int(hid)} NET:{int(net)} MSD:{int(msd)} ACM:{int(acm)} [{nettype}]"
+    return ok, summary + (("\n" + msg) if msg else "")
+
 
 # ---------- UI state ----------
 class MenuState:

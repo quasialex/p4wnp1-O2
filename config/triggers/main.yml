@@ -1,0 +1,21 @@
+usb:
+  on_attach:
+    - type: command
+      run: logger "P4wnP1: USB attached"
+  on_detach:
+    - type: command
+      run: logger "P4wnP1: USB detached"
+
+net:
+  net_up:
+    - iface: usb0
+      type: python
+      entrypoint: modules.responder_wrapper:start_quickcreds
+  net_down:
+    - iface: usb0
+      type: python
+      entrypoint: modules.responder_wrapper:stop_quickcreds
+
+timer:
+  every_sec: 0
+

@@ -1,0 +1,11 @@
+# Basic Windows lock picker demo:
+# Win+R, type notepad, press Enter, type some text, etc.
+CTRL GUI
+STRING r
+DELAY 300
+STRING notepad
+ENTER
+DELAY 700
+STRING Hello from P4wnP1-O2
+ENTER
+

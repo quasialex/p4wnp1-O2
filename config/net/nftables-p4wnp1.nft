@@ -1,0 +1,7 @@
+table ip p4wnp1 {
+  chain nat_post {
+    type nat hook postrouting priority 100; policy accept;
+    oifname != "usb0" masquerade
+  }
+}
+
